@@ -83,17 +83,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\dev-stop.ps1
 
 ## Visual Studio guidance
 
-- Open `VideoStudio.slnx` in Visual Studio. The solution currently contains the ASP.NET Core backend project: `backend/VideoStudio.Api/VideoStudio.Api.csproj`.
-- If you only need the backend, run `backend/VideoStudio.Api` normally.
-- The React frontend and Python worker are external process projects and are started by `.\scripts\dev-start.ps1`.
-- For full-stack local development, use `powershell -ExecutionPolicy Bypass -File .\scripts\dev-start.ps1`.
+- Open `VideoStudio.slnx` in Visual Studio.
+- API-only debugging: start `VideoStudio.Api`.
+- Full-stack local development: start `VideoStudio.DevLauncher`. It calls `.\scripts\dev-start.ps1`, which opens separate windows for the API, React/Vite frontend, and Python worker.
 - Stop launcher-started windows with `powershell -ExecutionPolicy Bypass -File .\scripts\dev-stop.ps1`.
 - The Python worker remains a separate process by design and should not be hosted inside the API process.
 
 ## Development modes
 
-- Mode A (Visual Studio API-only): run the ASP.NET Core API from Visual Studio for backend work and Swagger testing.
-- Mode B (Full stack): use `.\scripts\dev-start.ps1` to run API + React web + Python worker together.
+- Mode A (Visual Studio API-only): start `VideoStudio.Api` for backend work and Swagger testing.
+- Mode B (Visual Studio full stack): start `VideoStudio.DevLauncher` to run API + React web + Python worker together.
+- Mode C (terminal full stack): use `.\scripts\dev-start.ps1` directly.
 
 For real local Wan2.2 TI2V renders, configure `workers/video-worker/.env` from `.env.example`:
 
