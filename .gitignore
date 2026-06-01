@@ -1,0 +1,49 @@
+# IDE / OS
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+.DS_Store
+
+# .NET
+bin/
+obj/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+workers/video-worker/.env
+workers/video-worker/.venv/
+
+# Node
+node_modules/
+**/node_modules/
+dist/
+build/
+frontend/VideoStudio.Web/dist/
+frontend/VideoStudio.Web/.env
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+
+# Generated media / storage
+storage/
+*.mp4
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.srt
+
+# Logs
+logs/
+*.log
