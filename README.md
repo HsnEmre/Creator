@@ -116,7 +116,7 @@ The worker launches Wan2.2 directly through subprocess. ComfyUI is not used.
   - The Python worker can generate these images locally with SDXL. No external image generation API is used.
 - Director workflow: analyze the story, edit scenes/shots, upload shot start images, render selected shots or scenes, assemble completed shots into `assembled.mp4`, then finalize with audio into `final-preview.mp4`.
 - Ollama is used only for planning and prompt generation.
-- Wan2.2 is not an Ollama model. It will be connected later through the Python worker adapter.
+- Wan2.2 is not an Ollama model. Local Wan2.2 rendering is invoked by the Python worker adapter.
 - The ASP.NET Core API never runs GPU inference.
 - Local Windows renders are preview-speed: without `flash_attn`, Wan2.2 typically falls back to SDPA and is significantly slower. Current defaults prioritize stability (`1280*704`, `frame_num=49`, `sample_steps=10`).
 - Local runtime model uses three processes: API (ASP.NET Core), Web (React/Vite), and Worker (Python/Wan2.2 + TTS + FFmpeg).

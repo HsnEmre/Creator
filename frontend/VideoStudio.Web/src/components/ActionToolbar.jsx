@@ -6,6 +6,7 @@ export default function ActionToolbar({
   finalizeBusy,
   useCharacterReferenceInPrompt,
   useShotStartImage,
+  hasAnyShotStartImage,
   onUseCharacterReferenceInPromptChange,
   onUseShotStartImageChange,
   onAnalyze,
@@ -39,8 +40,23 @@ export default function ActionToolbar({
             checked={useShotStartImage}
             onChange={(event) => onUseShotStartImageChange?.(event.target.checked)}
           />
-          Use shot start images for I2V
+          Enable Image-to-Video with shot start images
         </label>
+        {hasAnyShotStartImage ? (
+          useShotStartImage ? (
+            <p className="msg ok compact-msg">
+              Shot start images are available. Image-to-Video is enabled, so Wan2.2 will use them as start frames.
+            </p>
+          ) : (
+            <p className="msg error compact-msg">
+              Shot start images are available. Enable Image-to-Video to use them as Wan2.2 start frames.
+            </p>
+          )
+        ) : (
+          <p className="muted compact-msg">
+            No shot start images are available yet. Video renders will use Text-to-Video until keyframes are generated or uploaded.
+          </p>
+        )}
         <button disabled={isBusy} onClick={onAnalyze}>
           {busyAction === "analyze" ? "Analyzing..." : "Analyze Story"}
         </button>

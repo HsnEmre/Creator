@@ -10,7 +10,9 @@ export default function VisualPreparationPanel({
   onUploadReference,
   onUploadStartImage,
   onGenerateCharacterReference,
-  onGenerateShotStartImage
+  onGenerateShotStartImage,
+  useShotStartImage,
+  hasAnyShotStartImage
 }) {
   const [characterDrafts, setCharacterDrafts] = useState({});
   const [shotDrafts, setShotDrafts] = useState({});
@@ -83,6 +85,21 @@ export default function VisualPreparationPanel({
       <p className="muted">
         Prepare reference and keyframe prompts before rendering. Image generation runs locally in the Python worker; manual uploads stay available.
       </p>
+      {hasAnyShotStartImage ? (
+        useShotStartImage ? (
+          <p className="msg ok">
+            Shot start images are available. Image-to-Video is enabled, so generated keyframes will be sent to Wan2.2 as start frames.
+          </p>
+        ) : (
+          <p className="msg error">
+            Shot start images are available. Enable Image-to-Video to use them as Wan2.2 start frames.
+          </p>
+        )
+      ) : (
+        <p className="muted">
+          No shot start images are available yet. Rendering will stay Text-to-Video until a keyframe is generated or uploaded.
+        </p>
+      )}
 
       <section className="subcard">
         <h3>Character References</h3>

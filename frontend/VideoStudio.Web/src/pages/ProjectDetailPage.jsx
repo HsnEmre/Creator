@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   analyzeProject,
@@ -42,6 +42,12 @@ import AssemblyPanel from "../components/AssemblyPanel";
 import VisualPreparationPanel from "../components/VisualPreparationPanel";
 import WorkflowStageBar from "../components/WorkflowStageBar";
 
+const VISUAL_JOB_TYPES = new Set(["GenerateCharacterReferenceImage", "GenerateShotStartImage"]);
+
+function isCompletedStatus(status) {
+  return status === 2 || String(status).toLowerCase() === "completed";
+}
+
 export default function ProjectDetailPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
@@ -60,8 +66,10 @@ export default function ProjectDetailPage() {
   const [busyAction, setBusyAction] = useState("");
   const [useCharacterReferenceInPrompt, setUseCharacterReferenceInPrompt] = useState(true);
   const [useShotStartImage, setUseShotStartImage] = useState(false);
+  const [hasUserSetShotStartImageMode, setHasUserSetShotStartImageMode] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const visualJobStatusRef = useRef(new Map());
 
   const latestCompletedRender = useMemo(() => {
     const completed = jobs.find(
@@ -98,10 +106,6 @@ export default function ProjectDetailPage() {
       ),
     [jobs]
   );
-  const hasAnyShotStartImage = useMemo(
-    () => Boolean(plan?.scenes?.some((scene) => scene.shots?.some((shot) => Boolean(shot.startImageUrl || shot.startImagePath)))),
-    [plan]
-  );
   const visualPlan = useMemo(() => {
     if (!preproduction || !plan) return plan;
     const characters = (plan.characters || []).map((character) => {
@@ -117,6 +121,10 @@ export default function ProjectDetailPage() {
     }));
     return { ...plan, characters, scenes };
   }, [plan, preproduction]);
+  const hasAnyShotStartImage = useMemo(
+    () => Boolean(visualPlan?.scenes?.some((scene) => scene.shots?.some((shot) => Boolean(shot.startImageUrl || shot.startImagePath)))),
+    [visualPlan]
+  );
   const selectedScene = useMemo(() => scenes.find((scene) => scene.id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
   const selectedSceneShots = useMemo(
     () => shots.filter((shot) => selectedScene && shot.sceneId === selectedScene.id).sort((a, b) => (a.shotIndex || 0) - (b.shotIndex || 0)),
@@ -127,6 +135,11 @@ export default function ProjectDetailPage() {
     const data = await getProject(projectId);
     setProject(data);
     setStoryText(data.storyText || "");
+  }, [projectId]);
+
+  const refreshProjectSummary = useCallback(async () => {
+    const data = await getProject(projectId);
+    setProject(data);
   }, [projectId]);
 
   const loadPlan = useCallback(async () => {
@@ -141,7 +154,29 @@ export default function ProjectDetailPage() {
 
   const loadJobs = useCallback(async () => {
     const data = await getRenderJobs(projectId);
-    setJobs(Array.isArray(data) ? data : []);
+    const nextJobs = Array.isArray(data) ? data : [];
+    let visualJobCompleted = false;
+    const nextVisualStatuses = new Map();
+    for (const job of nextJobs) {
+      if (!VISUAL_JOB_TYPES.has(job.jobTypeName)) {
+        continue;
+      }
+
+      const id = job.jobId || job.id;
+      if (!id) {
+        continue;
+      }
+
+      const currentStatus = job.status;
+      const previousStatus = visualJobStatusRef.current.get(id);
+      if (isCompletedStatus(currentStatus) && !isCompletedStatus(previousStatus)) {
+        visualJobCompleted = true;
+      }
+      nextVisualStatuses.set(id, currentStatus);
+    }
+    visualJobStatusRef.current = nextVisualStatuses;
+    setJobs(nextJobs);
+    return { jobs: nextJobs, visualJobCompleted };
   }, [projectId]);
 
   const loadDialogueLines = useCallback(async () => {
@@ -175,12 +210,30 @@ export default function ProjectDetailPage() {
   }, [refreshAll]);
 
   useEffect(() => {
+    setHasUserSetShotStartImageMode(false);
+    setUseShotStartImage(false);
+    visualJobStatusRef.current = new Map();
+  }, [projectId]);
+
+  useEffect(() => {
+    if (hasAnyShotStartImage && !hasUserSetShotStartImageMode) {
+      setUseShotStartImage(true);
+    }
+  }, [hasAnyShotStartImage, hasUserSetShotStartImageMode]);
+
+  useEffect(() => {
     const timer = setInterval(() => {
-      loadJobs().catch(() => {});
+      loadJobs()
+        .then((result) => {
+          if (result?.visualJobCompleted) {
+            Promise.all([refreshProjectSummary(), loadPlan(), loadPreproduction(), loadScenesAndShots()]).catch(() => {});
+          }
+        })
+        .catch(() => {});
       loadFinalVideo().catch(() => {});
     }, 5000);
     return () => clearInterval(timer);
-  }, [loadJobs, loadFinalVideo]);
+  }, [loadJobs, loadFinalVideo, refreshProjectSummary, loadPlan, loadPreproduction, loadScenesAndShots]);
 
   async function withAction(name, fn) {
     setBusyAction(name);
@@ -231,6 +284,11 @@ export default function ProjectDetailPage() {
         : "";
       setMessage(`Queued ${result?.queuedJobs ?? 0} render job(s).${warning}`);
     });
+  }
+
+  function onUseShotStartImageChange(value) {
+    setHasUserSetShotStartImageMode(true);
+    setUseShotStartImage(value);
   }
 
   function renderWithPayload(payload, label) {
@@ -482,8 +540,9 @@ export default function ProjectDetailPage() {
             finalizeBusy={hasRunningFinalize}
             useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
             useShotStartImage={useShotStartImage}
+            hasAnyShotStartImage={hasAnyShotStartImage}
             onUseCharacterReferenceInPromptChange={setUseCharacterReferenceInPrompt}
-            onUseShotStartImageChange={setUseShotStartImage}
+            onUseShotStartImageChange={onUseShotStartImageChange}
             onAnalyze={onAnalyze}
             onPrepareVisuals={onPrepareVisuals}
             onGenerateCharacterReferences={onGenerateCharacterReferences}
@@ -533,6 +592,8 @@ export default function ProjectDetailPage() {
             onUploadStartImage={onUploadStartImage}
             onGenerateCharacterReference={onGenerateCharacterReference}
             onGenerateShotStartImage={onGenerateShotStartImage}
+            useShotStartImage={useShotStartImage}
+            hasAnyShotStartImage={hasAnyShotStartImage}
           />
           <ProductionPlanViewer plan={visualPlan} onUploadReference={onUploadReference} onUploadStartImage={onUploadStartImage} />
         </main>
