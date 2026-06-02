@@ -20,6 +20,7 @@ export default function CreatorStepper({ steps, activeStep, onStepChange }) {
           >
             <span className="creator-step-index">{index + 1}</span>
             <span className="creator-step-copy">
+              <small className="creator-step-meta">Step {index + 1}</small>
               <b>{step.label || STEP_LABELS[step.id] || step.id}</b>
               <small>{step.summary || step.status || "Ready"}</small>
             </span>

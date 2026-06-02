@@ -41,9 +41,7 @@ function EmptyPlanState({ canAnalyze }) {
     <section className="content-plan-empty">
       <span className="badge badge-ready">Ready for planning</span>
       <h3>No production plan yet</h3>
-      <p>
-        Analyze will turn the saved story into scenes, shots, dialogue, character notes, and Wan-friendly visual prompts.
-      </p>
+      <p>Analyze will create scenes, shots, dialogue, characters, and visual prompts.</p>
       {!canAnalyze ? <p className="muted">Save the story first, then Analyze Story will become available.</p> : null}
     </section>
   );
@@ -83,11 +81,10 @@ function PlanPreview({ plan, dialogueLines }) {
           return (
             <article className="content-script-scene" key={`content-scene-${scene.index}`}>
               <div className="content-script-scene-head">
-                <h4>
-                  Scene {scene.index}: {scene.title || "Untitled Scene"}
-                </h4>
+                <h4>{scene.title || `Scene ${scene.index}`}</h4>
                 {scene.estimatedDurationSeconds ? <span>{scene.estimatedDurationSeconds}s</span> : null}
               </div>
+              <p className="content-scene-kicker">Scene {scene.index}</p>
               {scene.summary ? <p className="muted">{compactText(scene.summary, 180)}</p> : null}
               <div className="content-script-shot-list">
                 {shots.slice(0, MAX_SHOT_PREVIEW_COUNT).map((shot) => (
@@ -139,10 +136,18 @@ export default function ContentStep({
 
   return (
     <div className="creator-step-panel content-step">
+      <section className="content-step-head">
+        <span className="badge badge-ready">Content</span>
+        <h2>Shape the story before production starts</h2>
+        <p>
+          Write the idea, save it, then let the planner turn it into a reviewable video structure before you move into cast and storyboard work.
+        </p>
+      </section>
+
       <section className="content-story-card">
         <div className="content-story-head">
           <div>
-            <span className="eyebrow">Content</span>
+            <span className="eyebrow">Creator Intake</span>
             <h2>Story to Video</h2>
             <p className="muted">Enter a story idea or paste a full script.</p>
           </div>
@@ -177,16 +182,16 @@ export default function ContentStep({
         </div>
 
         <div className="content-primary-actions">
-          <button type="button" disabled={isBusy} onClick={onSaveStory}>
+          <button className="primary-button" type="button" disabled={isBusy} onClick={onSaveStory}>
             {isSaving ? "Saving..." : "Save Story"}
           </button>
-          <button type="button" disabled={isBusy || !canAnalyzeSavedStory} onClick={onAnalyze}>
+          <button className="primary-button" type="button" disabled={isBusy || !canAnalyzeSavedStory} onClick={onAnalyze}>
             {isAnalyzing ? "Analyzing..." : "Analyze Story"}
           </button>
-          <button type="button" disabled={!canGoNext} onClick={onNext}>
+          <button className="next-button" type="button" disabled={!canGoNext} onClick={onNext}>
             Next: Cast
           </button>
-          <button type="button" disabled={isBusy} onClick={onRefresh}>
+          <button className="quiet-button" type="button" disabled={isBusy} onClick={onRefresh}>
             Refresh
           </button>
         </div>

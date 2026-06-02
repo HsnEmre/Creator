@@ -12,10 +12,11 @@ export default function CreatorShell({
   message,
   error,
   children,
-  rightRail
+  rightRail,
+  railCollapsed = false
 }) {
   return (
-    <div className="creator-shell">
+    <div className={`creator-shell ${railCollapsed ? "creator-shell-focused" : ""}`}>
       <header className="creator-topbar">
         <div className="creator-title-block">
           <p className="eyebrow">VideoStudio Creator</p>
@@ -36,9 +37,19 @@ export default function CreatorShell({
       {message ? <p className="msg ok">{message}</p> : null}
       {error ? <p className="msg error">{error}</p> : null}
 
-      <div className="creator-workspace">
-        <main className="creator-main">{children}</main>
-        <aside className="creator-rail">{rightRail}</aside>
+      {railCollapsed && rightRail ? (
+        <details className="creator-monitor-drawer">
+          <summary>
+            <span>Monitor</span>
+            <small>Preview and job details</small>
+          </summary>
+          <div className="creator-monitor-drawer-body">{rightRail}</div>
+        </details>
+      ) : null}
+
+      <div className={`creator-workspace ${railCollapsed ? "creator-workspace-focused" : ""}`}>
+        <main className={`creator-main ${railCollapsed ? "creator-main-focused" : ""}`}>{children}</main>
+        {!railCollapsed ? <aside className="creator-rail">{rightRail}</aside> : null}
       </div>
     </div>
   );

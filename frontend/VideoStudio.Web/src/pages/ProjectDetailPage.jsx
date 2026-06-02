@@ -570,6 +570,7 @@ export default function ProjectDetailPage() {
         onRefresh={refreshAll}
         message={message}
         error={error}
+        railCollapsed={selectedStep === "content"}
         rightRail={
           <>
             <VideoPreviewPanel
