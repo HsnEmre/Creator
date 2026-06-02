@@ -59,7 +59,7 @@ body {
 
 .stage-bar {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 8px;
   margin: 0 0 12px;
 }
@@ -75,7 +75,7 @@ body {
   background: rgba(10, 15, 24, 0.72);
   color: var(--muted);
   font-size: 12px;
-  white-space: nowrap;
+  line-height: 1.2;
 }
 
 .stage-pill span {
@@ -112,6 +112,88 @@ body {
   display: grid;
   grid-template-columns: 1fr 1.2fr 1fr;
   gap: 12px;
+}
+
+.production-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 14px;
+  align-items: start;
+}
+
+.production-board,
+.production-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.production-monitor {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+
+.workflow-lane {
+  padding: 0 0 16px 14px;
+  border-left: 2px solid rgba(92, 197, 255, 0.32);
+}
+
+.workflow-lane-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.workflow-lane-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workflow-lane-title h2 {
+  margin-bottom: 2px;
+}
+
+.workflow-lane-number {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid rgba(92, 197, 255, 0.5);
+  background: rgba(92, 197, 255, 0.14);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.workflow-lane-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lane-status {
+  flex: 0 0 auto;
+}
+
+.lane-status-done {
+  background: rgba(54, 208, 132, 0.16);
+}
+
+.lane-status-ready,
+.lane-status-running {
+  background: rgba(255, 199, 95, 0.18);
+}
+
+.lane-status-waiting {
+  background: rgba(149, 165, 191, 0.12);
+  color: var(--muted);
 }
 
 .landing-layout {
@@ -219,6 +301,11 @@ button:disabled {
 .msg {
   padding: 8px;
   border-radius: 6px;
+}
+
+.compact-msg {
+  margin: 0;
+  font-size: 13px;
 }
 
 .msg.ok {
@@ -404,8 +491,15 @@ audio {
 }
 
 @media (max-width: 1200px) {
-  .layout {
+  .layout,
+  .production-layout {
     grid-template-columns: 1fr;
+  }
+
+  .production-monitor {
+    position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .stage-bar {

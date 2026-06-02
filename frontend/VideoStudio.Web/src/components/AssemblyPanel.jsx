@@ -1,4 +1,4 @@
-export default function AssemblyPanel({ onAssemble, onFinalize, isBusy, finalVideo }) {
+export default function AssemblyPanel({ onAssemble, onFinalize, isBusy, finalVideo, showFinalize = true }) {
   return (
     <section className="card">
       <h2>Movie Assembly</h2>
@@ -7,9 +7,9 @@ export default function AssemblyPanel({ onAssemble, onFinalize, isBusy, finalVid
         <button disabled={isBusy} onClick={onAssemble}>
           Assemble Movie
         </button>
-        <button disabled={isBusy} onClick={onFinalize}>
+        {showFinalize ? <button disabled={isBusy} onClick={onFinalize}>
           Finalize Movie
-        </button>
+        </button> : null}
       </div>
       {finalVideo?.assembledMediaUrl ? <p className="path">Assembled: {finalVideo.assembledMediaUrl}</p> : null}
       {finalVideo?.mediaUrl ? <p className="path">Final: {finalVideo.mediaUrl}</p> : null}

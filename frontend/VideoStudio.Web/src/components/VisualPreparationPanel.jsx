@@ -12,7 +12,8 @@ export default function VisualPreparationPanel({
   onGenerateCharacterReference,
   onGenerateShotStartImage,
   useShotStartImage,
-  hasAnyShotStartImage
+  hasAnyShotStartImage,
+  mode = "all"
 }) {
   const [characterDrafts, setCharacterDrafts] = useState({});
   const [shotDrafts, setShotDrafts] = useState({});
@@ -76,16 +77,30 @@ export default function VisualPreparationPanel({
     setShotDrafts((current) => ({ ...current, [shotId]: { ...(current[shotId] || {}), [field]: value } }));
   }
 
+  const showCharacterReferences = mode === "all" || mode === "characters";
+  const showShotStartImages = mode === "all" || mode === "shots";
+  const title = mode === "characters" ? "Character References" : mode === "shots" ? "Shot Start Images / Keyframes" : "Visual Preparation";
+
   return (
     <section className="card">
       <div className="row">
-        <h2>Visual Preparation</h2>
+        <h2>{title}</h2>
         <span className="badge">Local SDXL</span>
       </div>
-      <p className="muted">
-        Prepare reference and keyframe prompts before rendering. Image generation runs locally in the Python worker; manual uploads stay available.
-      </p>
-      {hasAnyShotStartImage ? (
+      {mode === "characters" ? (
+        <p className="muted">
+          Generate or upload character reference portraits for identity guidance in compiled prompts. These images are not passed to Wan2.2 as start frames.
+        </p>
+      ) : mode === "shots" ? (
+        <p className="muted">
+          Generate or upload scene-like shot start images. These keyframes are sent to Wan2.2 only when Image-to-Video is enabled.
+        </p>
+      ) : (
+        <p className="muted">
+          Prepare reference and keyframe prompts before rendering. Image generation runs locally in the Python worker; manual uploads stay available.
+        </p>
+      )}
+      {showShotStartImages && (hasAnyShotStartImage ? (
         useShotStartImage ? (
           <p className="msg ok">
             Shot start images are available. Image-to-Video is enabled, so generated keyframes will be sent to Wan2.2 as start frames.
@@ -99,9 +114,9 @@ export default function VisualPreparationPanel({
         <p className="muted">
           No shot start images are available yet. Rendering will stay Text-to-Video until a keyframe is generated or uploaded.
         </p>
-      )}
+      ))}
 
-      <section className="subcard">
+      {showCharacterReferences ? <section className="subcard">
         <h3>Character References</h3>
         <div className="list">
           {(plan.characters || []).map((character) => {
@@ -146,9 +161,9 @@ export default function VisualPreparationPanel({
             );
           })}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="subcard">
+      {showShotStartImages ? <section className="subcard">
         <h3>Shot Start Images</h3>
         {!visibleShots.length ? <p>No shots selected.</p> : null}
         <div className="list">
@@ -194,7 +209,7 @@ export default function VisualPreparationPanel({
             );
           })}
         </div>
-      </section>
+      </section> : null}
     </section>
   );
 }

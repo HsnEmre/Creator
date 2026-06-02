@@ -1,7 +1,14 @@
 import CharacterList from "./CharacterList";
 import ShotList from "./ShotList";
 
-export default function ProductionPlanViewer({ plan, onUploadReference, onUploadStartImage }) {
+export default function ProductionPlanViewer({
+  plan,
+  onUploadReference,
+  onUploadStartImage,
+  showCharacters = true,
+  showScenes = true,
+  showShotUploads = true
+}) {
   if (!plan) {
     return (
       <section className="card">
@@ -34,9 +41,9 @@ export default function ProductionPlanViewer({ plan, onUploadReference, onUpload
         </p>
       </section>
 
-      <CharacterList characters={plan.characters || []} onUploadReference={onUploadReference} />
+      {showCharacters ? <CharacterList characters={plan.characters || []} onUploadReference={onUploadReference} /> : null}
 
-      <section className="subcard">
+      {showScenes ? <section className="subcard">
         <h3>Scenes</h3>
         {plan.scenes?.length ? (
           plan.scenes.map((scene) => (
@@ -48,13 +55,13 @@ export default function ProductionPlanViewer({ plan, onUploadReference, onUpload
               <p>
                 <b>Location:</b> {scene.location} | <b>Mood:</b> {scene.mood}
               </p>
-              <ShotList shots={scene.shots || []} onUploadStartImage={onUploadStartImage} />
+              <ShotList shots={scene.shots || []} onUploadStartImage={onUploadStartImage} showUpload={showShotUploads} />
             </details>
           ))
         ) : (
           <p>No scenes available.</p>
         )}
-      </section>
+      </section> : null}
     </section>
   );
 }

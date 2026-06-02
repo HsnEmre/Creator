@@ -1,6 +1,6 @@
 import { toAbsoluteApiUrl } from "../api/client";
 
-export default function CharacterList({ characters, onUploadReference }) {
+export default function CharacterList({ characters, onUploadReference, showReferenceTools = true }) {
   return (
     <section className="subcard">
       <h3>Characters</h3>
@@ -30,7 +30,7 @@ export default function CharacterList({ characters, onUploadReference }) {
               <p>
                 <b>Voice:</b> {c.voiceStyle || "-"}
               </p>
-              {c.id ? (
+              {showReferenceTools && c.id ? (
                 <label className="file-control">
                   Reference Image
                   <input

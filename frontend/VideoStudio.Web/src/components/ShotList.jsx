@@ -1,6 +1,6 @@
 import { toAbsoluteApiUrl } from "../api/client";
 
-export default function ShotList({ shots, onUploadStartImage }) {
+export default function ShotList({ shots, onUploadStartImage, showUpload = true }) {
   if (!shots.length) {
     return <p>No shots available.</p>;
   }
@@ -18,7 +18,7 @@ export default function ShotList({ shots, onUploadStartImage }) {
             <img className="reference-image" src={toAbsoluteApiUrl(shot.startImageUrl)} alt={`Shot ${shot.index} start`} />
           ) : null}
           <p className="muted">Shot start image is used for Image-to-Video.</p>
-          {shot.id && shot.sceneId ? (
+          {showUpload && shot.id && shot.sceneId ? (
             <label className="file-control">
               Upload start image / keyframe
               <input
