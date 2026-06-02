@@ -28,8 +28,7 @@ import {
   uploadCharacterReferenceImage,
   uploadShotStartImage
 } from "../api/client";
-import StoryEditor from "../components/StoryEditor";
-import ProductionPlanViewer from "../components/ProductionPlanViewer";
+import ContentStep from "../components/ContentStep";
 import RenderJobsPanel from "../components/RenderJobsPanel";
 import DialogueLinesPanel from "../components/DialogueLinesPanel";
 import VideoPreviewPanel from "../components/VideoPreviewPanel";
@@ -512,9 +511,6 @@ export default function ProjectDetailPage() {
   const completedAudioCount = dialogueLines.filter((line) => line.audioUrl || line.audioPath).length;
   const hasAssembly = completedJobs.some((job) => job.jobTypeName === "AssembleVideo") || Boolean(finalVideo?.assembledMediaUrl);
   const hasFinal = completedJobs.some((job) => job.jobTypeName === "MuxAudio") || Boolean(finalVideo?.mediaUrl);
-  const storyStatus = project?.storyText ? "Done" : "Ready";
-  const analyzeStatus = plan ? "Done" : project?.storyText ? "Ready" : "Waiting";
-  const planStatus = plan ? "Done" : "Waiting";
   const characterStatus = characterCount ? "Done" : plan ? "Ready" : "Waiting";
   const referenceStatus = characterReferenceCount ? "Done" : characterCount ? "Ready" : "Waiting";
   const keyframeStatus = shotStartImageCount ? "Done" : shotCount ? "Ready" : "Waiting";
@@ -603,35 +599,22 @@ export default function ProjectDetailPage() {
         }
       >
         {selectedStep === "content" ? (
-          <div className="creator-step-panel">
-            <section className="creator-step-intro">
-              <span className="badge">{planStatus}</span>
-              <h2>Content</h2>
-              <p className="muted">Write or paste a story, then let Ollama turn it into scenes, shots, narration, and dialogue.</p>
-            </section>
-            <div className="creator-content-grid">
-              <StoryEditor storyText={storyText} onChange={setStoryText} onSave={onSaveStory} isBusy={busyAction === "save-story"} />
-              <section className="card compact-card">
-                <h2>Plan Story</h2>
-                <p className="muted">
-                  Analysis creates the production plan, characters, scenes, shots, dialogue, and visual prompts. Ollama is used only for planning.
-                </p>
-                <div className="actions">
-                  <button disabled={Boolean(busyAction) || !project.storyText} onClick={onAnalyze}>
-                    {busyAction === "analyze" ? "Analyzing..." : "Analyze Story"}
-                  </button>
-                  <button disabled={Boolean(busyAction)} onClick={refreshAll}>Refresh Project</button>
-                </div>
-              </section>
-            </div>
-            <ProductionPlanViewer
-              plan={visualPlan}
-              onUploadReference={onUploadReference}
-              onUploadStartImage={onUploadStartImage}
-              showCharacters={false}
-              showShotUploads={false}
-            />
-          </div>
+          <ContentStep
+            project={project}
+            plan={visualPlan}
+            storyText={storyText}
+            dialogueLines={dialogueLines}
+            isBusy={Boolean(busyAction)}
+            isSaving={busyAction === "save-story"}
+            isAnalyzing={busyAction === "analyze"}
+            canAnalyze={Boolean(project.storyText)}
+            canGoNext={characterCount > 0}
+            onStoryChange={setStoryText}
+            onSaveStory={onSaveStory}
+            onAnalyze={onAnalyze}
+            onRefresh={refreshAll}
+            onNext={() => setSelectedStep("cast")}
+          />
         ) : null}
 
         {selectedStep === "cast" ? (
