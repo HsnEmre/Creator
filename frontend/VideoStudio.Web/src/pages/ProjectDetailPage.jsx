@@ -34,14 +34,13 @@ import RenderJobsPanel from "../components/RenderJobsPanel";
 import DialogueLinesPanel from "../components/DialogueLinesPanel";
 import VideoPreviewPanel from "../components/VideoPreviewPanel";
 import CharacterList from "../components/CharacterList";
+import CreatorShell from "../components/CreatorShell";
 import SceneListPanel from "../components/SceneListPanel";
 import SceneEditorPanel from "../components/SceneEditorPanel";
 import ShotEditorPanel from "../components/ShotEditorPanel";
 import ShotSelectionToolbar from "../components/ShotSelectionToolbar";
 import AssemblyPanel from "../components/AssemblyPanel";
 import VisualPreparationPanel from "../components/VisualPreparationPanel";
-import WorkflowLane from "../components/WorkflowLane";
-import WorkflowStageBar from "../components/WorkflowStageBar";
 
 const VISUAL_JOB_TYPES = new Set(["GenerateCharacterReferenceImage", "GenerateShotStartImage"]);
 
@@ -68,6 +67,7 @@ export default function ProjectDetailPage() {
   const [useCharacterReferenceInPrompt, setUseCharacterReferenceInPrompt] = useState(true);
   const [useShotStartImage, setUseShotStartImage] = useState(false);
   const [hasUserSetShotStartImageMode, setHasUserSetShotStartImageMode] = useState(false);
+  const [selectedStep, setSelectedStep] = useState("content");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const visualJobStatusRef = useRef(new Map());
@@ -522,6 +522,36 @@ export default function ProjectDetailPage() {
   const assemblyStatus = hasAssembly ? "Done" : completedRenderCount ? "Ready" : "Waiting";
   const audioStatus = hasRunningAudio ? "Running" : completedAudioCount ? "Done" : dialogueLines.length ? "Ready" : "Waiting";
   const finalStatus = hasRunningFinalize ? "Running" : hasFinal ? "Done" : hasAssembly || completedRenderCount ? "Ready" : "Waiting";
+  const activeJobCount = jobs.filter((job) => {
+    const status = String(job.status).toLowerCase();
+    return job.status === 0 || job.status === 1 || status === "pending" || status === "rendering";
+  }).length;
+  const creatorSteps = [
+    {
+      id: "content",
+      label: "Content",
+      status: plan ? "done" : project?.storyText ? "ready" : "ready",
+      summary: plan ? `${sceneCount} scenes planned` : project?.storyText ? "Ready to analyze" : "Write a story"
+    },
+    {
+      id: "cast",
+      label: "Cast",
+      status: characterReferenceCount > 0 ? "done" : characterCount > 0 ? "ready" : "waiting",
+      summary: characterCount ? `${characterReferenceCount}/${characterCount} references` : "Analyze first"
+    },
+    {
+      id: "storyboard",
+      label: "Storyboard",
+      status: completedRenderCount > 0 ? "done" : shotCount > 0 ? "ready" : "waiting",
+      summary: shotCount ? `${shotStartImageCount}/${shotCount} keyframes` : "No shots yet"
+    },
+    {
+      id: "edit",
+      label: "Edit",
+      status: hasFinal ? "done" : completedRenderCount > 0 || hasAssembly ? "ready" : "waiting",
+      summary: hasFinal ? "Final ready" : hasAssembly ? "Ready to finalize" : "Assemble and audio"
+    }
+  ];
 
   if (!project) {
     return (
@@ -533,48 +563,67 @@ export default function ProjectDetailPage() {
 
   return (
     <div className="studio-page">
-      <div className="header">
-        <div>
-          <p className="eyebrow">Local AI Video Studio</p>
-          <h1>{project.title || project.name}</h1>
-        </div>
-        <div className="header-actions">
-          <button onClick={() => navigate("/")}>Back</button>
-          <button onClick={refreshAll}>Refresh</button>
-        </div>
-      </div>
-
-      <WorkflowStageBar project={project} plan={visualPlan || plan} jobs={jobs} finalVideo={finalVideo} dialogueLines={dialogueLines} />
-
-      {message ? <p className="msg ok">{message}</p> : null}
-      {error ? <p className="msg error">{error}</p> : null}
-
-      <div className="production-layout">
-        <main className="production-board">
-          <WorkflowLane number={1} title="Story" status={storyStatus} summary="Write and save the source story before planning.">
-            <StoryEditor storyText={storyText} onChange={setStoryText} onSave={onSaveStory} isBusy={busyAction === "save-story"} />
-          </WorkflowLane>
-
-          <WorkflowLane number={2} title="Analyze" status={analyzeStatus} summary="Send the saved story to Ollama and persist the structured plan.">
-            <section className="card compact-card">
-              <p className="muted">
-                Analysis creates the production plan, characters, scenes, shots, dialogue, and visual prompts. Ollama is used only for planning.
-              </p>
+      <CreatorShell
+        title={project.title || project.name}
+        projectStatus={project.status}
+        activeJobCount={activeJobCount}
+        steps={creatorSteps}
+        activeStep={selectedStep}
+        onStepChange={setSelectedStep}
+        onBack={() => navigate("/")}
+        onRefresh={refreshAll}
+        message={message}
+        error={error}
+        rightRail={
+          <>
+            <VideoPreviewPanel
+              finalMediaUrl={finalVideo?.mediaUrl || null}
+              assembledMediaUrl={finalVideo?.assembledMediaUrl || null}
+              renderMediaUrl={latestCompletedRender?.outputUrl || null}
+              outputPath={finalVideo?.localPath || latestCompletedRender?.outputPath || null}
+              assembledPath={finalVideo?.assembledLocalPath || null}
+            />
+            <details className="monitor-details">
+              <summary>Job Monitor</summary>
+              <RenderJobsPanel jobs={jobs} onRefresh={loadJobs} />
+            </details>
+            <section className="card">
+              <h2>Development Recovery</h2>
+              <p className="muted">Use these only for local queue cleanup while iterating.</p>
               <div className="actions">
-                <button disabled={Boolean(busyAction) || !project.storyText} onClick={onAnalyze}>
-                  {busyAction === "analyze" ? "Analyzing..." : "Analyze Story"}
+                <button disabled={Boolean(busyAction)} onClick={onResetStale}>
+                  {busyAction === "reset-stale" ? "Resetting..." : "Reset Stale Jobs (30m)"}
                 </button>
-                <button disabled={Boolean(busyAction)} onClick={refreshAll}>Refresh Project</button>
+                <button disabled={Boolean(busyAction)} onClick={onCleanupJobs}>
+                  {busyAction === "cleanup" ? "Cleaning..." : "Cleanup Jobs"}
+                </button>
               </div>
             </section>
-          </WorkflowLane>
-
-          <WorkflowLane
-            number={3}
-            title="Production Plan"
-            status={planStatus}
-            summary={`${sceneCount} scene(s), ${shotCount} shot(s). Review structure before visual preparation.`}
-          >
+          </>
+        }
+      >
+        {selectedStep === "content" ? (
+          <div className="creator-step-panel">
+            <section className="creator-step-intro">
+              <span className="badge">{planStatus}</span>
+              <h2>Content</h2>
+              <p className="muted">Write or paste a story, then let Ollama turn it into scenes, shots, narration, and dialogue.</p>
+            </section>
+            <div className="creator-content-grid">
+              <StoryEditor storyText={storyText} onChange={setStoryText} onSave={onSaveStory} isBusy={busyAction === "save-story"} />
+              <section className="card compact-card">
+                <h2>Plan Story</h2>
+                <p className="muted">
+                  Analysis creates the production plan, characters, scenes, shots, dialogue, and visual prompts. Ollama is used only for planning.
+                </p>
+                <div className="actions">
+                  <button disabled={Boolean(busyAction) || !project.storyText} onClick={onAnalyze}>
+                    {busyAction === "analyze" ? "Analyzing..." : "Analyze Story"}
+                  </button>
+                  <button disabled={Boolean(busyAction)} onClick={refreshAll}>Refresh Project</button>
+                </div>
+              </section>
+            </div>
             <ProductionPlanViewer
               plan={visualPlan}
               onUploadReference={onUploadReference}
@@ -582,23 +631,18 @@ export default function ProjectDetailPage() {
               showCharacters={false}
               showShotUploads={false}
             />
-          </WorkflowLane>
+          </div>
+        ) : null}
 
-          <WorkflowLane
-            number={4}
-            title="Characters"
-            status={characterStatus}
-            summary={`${characterCount} character(s). Character bibles feed prompt continuity.`}
-          >
-            <CharacterList characters={visualPlan?.characters || []} onUploadReference={onUploadReference} showReferenceTools={false} />
-          </WorkflowLane>
-
-          <WorkflowLane
-            number={5}
-            title="Character References"
-            status={referenceStatus}
-            summary={`${characterReferenceCount}/${characterCount} reference image(s) ready. References guide identity in prompts only.`}
-          >
+        {selectedStep === "cast" ? (
+          <div className="creator-step-panel">
+            <section className="creator-step-intro">
+              <span className="badge">{referenceStatus}</span>
+              <h2>Cast</h2>
+              <p className="muted">
+                Review detected characters and create identity references. Character references guide prompts; they are not Wan2.2 start frames.
+              </p>
+            </section>
             <section className="card compact-card">
               <div className="actions">
                 <button disabled={Boolean(busyAction) || !plan} onClick={onPrepareVisuals}>
@@ -609,6 +653,7 @@ export default function ProjectDetailPage() {
                 </button>
               </div>
             </section>
+            <CharacterList characters={visualPlan?.characters || []} onUploadReference={onUploadReference} showReferenceTools={false} />
             <VisualPreparationPanel
               mode="characters"
               plan={visualPlan}
@@ -623,51 +668,18 @@ export default function ProjectDetailPage() {
               useShotStartImage={useShotStartImage}
               hasAnyShotStartImage={hasAnyShotStartImage}
             />
-          </WorkflowLane>
+          </div>
+        ) : null}
 
-          <WorkflowLane
-            number={6}
-            title="Shot Start Images / Keyframes"
-            status={keyframeStatus}
-            summary={`${shotStartImageCount}/${shotCount} keyframe(s) ready. Keyframes drive Wan2.2 Image-to-Video when enabled.`}
-          >
-            <section className="card compact-card">
-              <div className="actions">
-                <button disabled={Boolean(busyAction) || !plan} onClick={onPrepareVisuals}>
-                  {busyAction === "prepare-visuals" ? "Preparing..." : "Prepare Visual Prompts"}
-                </button>
-                <button disabled={Boolean(busyAction) || !plan} onClick={onGenerateShotStartImages}>
-                  {busyAction === "generate-shot-start-images" ? "Queueing..." : "Generate Shot Start Images"}
-                </button>
-                <button disabled={Boolean(busyAction) || !plan} onClick={onRegenerateMissingVisuals}>
-                  {busyAction === "regenerate-missing-visuals" ? "Queueing..." : "Regenerate Missing Visuals"}
-                </button>
-              </div>
+        {selectedStep === "storyboard" ? (
+          <div className="creator-step-panel">
+            <section className="creator-step-intro">
+              <span className="badge">{renderStatus}</span>
+              <h2>Storyboard</h2>
+              <p className="muted">Review shots, generate keyframes, and animate selected shots through the existing RenderJob queue.</p>
             </section>
-            <VisualPreparationPanel
-              mode="shots"
-              plan={visualPlan}
-              selectedScene={selectedScene}
-              selectedShotIds={selectedShotIds}
-              onSaveCharacterPrompt={onSaveCharacterPrompt}
-              onSaveShotPrompt={onSaveShotPrompt}
-              onUploadReference={onUploadReference}
-              onUploadStartImage={onUploadStartImage}
-              onGenerateCharacterReference={onGenerateCharacterReference}
-              onGenerateShotStartImage={onGenerateShotStartImage}
-              useShotStartImage={useShotStartImage}
-              hasAnyShotStartImage={hasAnyShotStartImage}
-            />
-          </WorkflowLane>
-
-          <WorkflowLane
-            number={7}
-            title="Render Selected Shots"
-            status={renderStatus}
-            summary={`${selectedShotIds.length} selected, ${completedRenderCount} completed render(s). Wan2.2 stays inside the Python worker.`}
-          >
             <section className="card compact-card">
-              <h2>Render Mode</h2>
+              <h2>Image-to-Video</h2>
               <label className="check-control">
                 <input
                   type="checkbox"
@@ -682,52 +694,85 @@ export default function ProjectDetailPage() {
                   checked={useShotStartImage}
                   onChange={(event) => onUseShotStartImageChange(event.target.checked)}
                 />
-                Enable Image-to-Video with shot start images
+                Animate from shot start images when available
               </label>
               {hasAnyShotStartImage ? (
                 useShotStartImage ? (
                   <p className="msg ok compact-msg">
-                    Image-to-Video is enabled. Render jobs with shot start images will pass them to Wan2.2 as start frames.
+                    Image-to-Video is enabled. Shots with keyframes will send those images to Wan2.2 as start frames.
                   </p>
                 ) : (
                   <p className="msg error compact-msg">
-                    Shot start images are available, but Image-to-Video is disabled. Rendering will stay Text-to-Video.
+                    Keyframes are available, but Image-to-Video is disabled. Rendering will stay Text-to-Video.
                   </p>
                 )
               ) : (
-                <p className="muted compact-msg">No shot start images are available yet. Rendering will use Text-to-Video.</p>
+                <p className="muted compact-msg">No shot keyframes are available yet. Rendering will use Text-to-Video.</p>
               )}
               <div className="actions">
+                <button disabled={Boolean(busyAction) || !plan} onClick={onPrepareVisuals}>
+                  {busyAction === "prepare-visuals" ? "Preparing..." : "Prepare Keyframe Prompts"}
+                </button>
+                <button disabled={Boolean(busyAction) || !plan} onClick={onGenerateShotStartImages}>
+                  {busyAction === "generate-shot-start-images" ? "Queueing..." : "Generate Shot Keyframes"}
+                </button>
+                <button disabled={Boolean(busyAction) || !plan} onClick={onRegenerateMissingVisuals}>
+                  {busyAction === "regenerate-missing-visuals" ? "Queueing..." : "Regenerate Missing Visuals"}
+                </button>
                 <button disabled={Boolean(busyAction) || hasRunningRenderVideo} onClick={onRenderFastPreview}>
                   {busyAction === "render" ? "Queueing..." : "Render FastPreview (1 Shot)"}
                 </button>
               </div>
             </section>
-            <SceneListPanel scenes={scenes} selectedSceneId={selectedScene?.id} onSelectScene={setSelectedSceneId} />
-            <SceneEditorPanel scene={selectedScene} onSave={onSaveScene} />
-            <ShotSelectionToolbar
-              selectedCount={selectedShotIds.length}
-              isBusy={Boolean(busyAction) || hasRunningRenderVideo}
-              onRenderSelected={onRenderSelected}
-              onRenderScene={onRenderScene}
-              onRenderAll={onRenderAll}
-            />
-            <ShotEditorPanel
-              scene={selectedScene}
-              shots={selectedSceneShots}
+            <div className="storyboard-workspace">
+              <SceneListPanel scenes={scenes} selectedSceneId={selectedScene?.id} onSelectScene={setSelectedSceneId} />
+              <div className="storyboard-main-stack">
+                <SceneEditorPanel scene={selectedScene} onSave={onSaveScene} />
+                <ShotSelectionToolbar
+                  selectedCount={selectedShotIds.length}
+                  isBusy={Boolean(busyAction) || hasRunningRenderVideo}
+                  onRenderSelected={onRenderSelected}
+                  onRenderScene={onRenderScene}
+                  onRenderAll={onRenderAll}
+                />
+                <ShotEditorPanel
+                  scene={selectedScene}
+                  shots={selectedSceneShots}
+                  selectedShotIds={selectedShotIds}
+                  onToggleShot={onToggleShot}
+                  onSaveShot={onSaveShot}
+                  onUploadStartImage={onUploadStartImage}
+                />
+              </div>
+            </div>
+            <VisualPreparationPanel
+              mode="shots"
+              plan={visualPlan}
+              selectedScene={selectedScene}
               selectedShotIds={selectedShotIds}
-              onToggleShot={onToggleShot}
-              onSaveShot={onSaveShot}
+              onSaveCharacterPrompt={onSaveCharacterPrompt}
+              onSaveShotPrompt={onSaveShotPrompt}
+              onUploadReference={onUploadReference}
               onUploadStartImage={onUploadStartImage}
+              onGenerateCharacterReference={onGenerateCharacterReference}
+              onGenerateShotStartImage={onGenerateShotStartImage}
+              useShotStartImage={useShotStartImage}
+              hasAnyShotStartImage={hasAnyShotStartImage}
             />
-          </WorkflowLane>
+          </div>
+        ) : null}
 
-          <WorkflowLane number={8} title="Assemble" status={assemblyStatus} summary="Stitch completed shot renders in scene and shot order.">
+        {selectedStep === "edit" ? (
+          <div className="creator-step-panel">
+            <section className="creator-step-intro">
+              <span className="badge">{finalStatus}</span>
+              <h2>Edit</h2>
+              <p className="muted">Assemble rendered shots, generate dialogue audio, finalize, and preview the movie.</p>
+            </section>
             <AssemblyPanel isBusy={Boolean(busyAction)} onAssemble={onAssemble} onFinalize={onFinalize} finalVideo={finalVideo} showFinalize={false} />
-          </WorkflowLane>
-
-          <WorkflowLane number={9} title="Audio" status={audioStatus} summary={`${completedAudioCount}/${dialogueLines.length} dialogue audio file(s) ready.`}>
             <section className="card compact-card">
+              <h2>Audio and Final Movie</h2>
+              <p className="muted">TTS and FFmpeg jobs run in the Python worker. The API only queues and tracks the work.</p>
               <div className="actions">
                 <button disabled={Boolean(busyAction) || hasRunningAudio} onClick={onGenerateAudio}>
                   {busyAction === "audio" ? "Queueing..." : "Generate Audio"}
@@ -735,16 +780,6 @@ export default function ProjectDetailPage() {
                 <button disabled={Boolean(busyAction) || hasRunningAudio} onClick={onRegenerateAudio}>
                   {busyAction === "audio-force" ? "Queueing..." : "Regenerate Audio"}
                 </button>
-              </div>
-            </section>
-            <DialogueLinesPanel lines={dialogueLines} onRefresh={loadDialogueLines} />
-          </WorkflowLane>
-
-          <WorkflowLane number={10} title="Finalize" status={finalStatus} summary="Mux audio with the assembled movie and preserve video duration.">
-            <section className="card">
-              <h2>Finalize Movie</h2>
-              <p className="muted">Finalize creates a mux job for the Python worker. FFmpeg processing does not run in the ASP.NET Core API.</p>
-              <div className="actions">
                 <button disabled={Boolean(busyAction) || hasRunningFinalize} onClick={onFinalize}>
                   {busyAction === "finalize" ? "Queueing..." : "Finalize Video"}
                 </button>
@@ -752,34 +787,11 @@ export default function ProjectDetailPage() {
                   {busyAction === "refinalize" ? "Queueing..." : "Re-finalize Video"}
                 </button>
               </div>
-              {finalVideo?.mediaUrl ? <p className="path">Final: {finalVideo.mediaUrl}</p> : null}
             </section>
-          </WorkflowLane>
-        </main>
-
-        <aside className="production-monitor">
-          <RenderJobsPanel jobs={jobs} onRefresh={loadJobs} />
-          <VideoPreviewPanel
-            finalMediaUrl={finalVideo?.mediaUrl || null}
-            assembledMediaUrl={finalVideo?.assembledMediaUrl || null}
-            renderMediaUrl={latestCompletedRender?.outputUrl || null}
-            outputPath={finalVideo?.localPath || latestCompletedRender?.outputPath || null}
-            assembledPath={finalVideo?.assembledLocalPath || null}
-          />
-          <section className="card">
-            <h2>Development Recovery</h2>
-            <p className="muted">Use these only for local queue cleanup while iterating.</p>
-            <div className="actions">
-              <button disabled={Boolean(busyAction)} onClick={onResetStale}>
-                {busyAction === "reset-stale" ? "Resetting..." : "Reset Stale Jobs (30m)"}
-              </button>
-              <button disabled={Boolean(busyAction)} onClick={onCleanupJobs}>
-                {busyAction === "cleanup" ? "Cleaning..." : "Cleanup Jobs"}
-              </button>
-            </div>
-          </section>
-        </aside>
-      </div>
+            <DialogueLinesPanel lines={dialogueLines} onRefresh={loadDialogueLines} />
+          </div>
+        ) : null}
+      </CreatorShell>
     </div>
   );
 }
