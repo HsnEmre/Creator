@@ -1,0 +1,479 @@
+import { useEffect, useMemo, useState } from "react";
+import { toAbsoluteApiUrl } from "../api/client";
+
+function statusLabel(value) {
+  if (typeof value === "string") return value;
+  if (value === 0) return "Pending";
+  if (value === 1) return "Rendering";
+  if (value === 2) return "Completed";
+  if (value === 3) return "Failed";
+  return value === undefined || value === null ? "Unknown" : `Unknown(${value})`;
+}
+
+function isRunningJob(job) {
+  const status = String(statusLabel(job?.status)).toLowerCase();
+  return status === "pending" || status === "rendering";
+}
+
+function isCompletedJob(job) {
+  return String(statusLabel(job?.status)).toLowerCase() === "completed";
+}
+
+function compactText(value, maxLength = 180) {
+  if (!value) return "";
+  const normalized = String(value).replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trim()}...`;
+}
+
+function copyText(value) {
+  if (!value || !navigator.clipboard) return;
+  navigator.clipboard.writeText(value).catch(() => {});
+}
+
+function getShotKey(shot) {
+  return `${shot.sceneIndex ?? "-"}-${shot.index ?? shot.shotIndex ?? "-"}`;
+}
+
+function getShotStartUrl(shot) {
+  return shot?.startImageUrl ? toAbsoluteApiUrl(shot.startImageUrl) : "";
+}
+
+function getShotStatus(shot, jobs) {
+  const renderJob = jobs.find((job) => job.jobTypeName === "RenderVideo" && isCompletedJob(job));
+  if (renderJob) return "Rendered";
+  const runningRender = jobs.find((job) => job.jobTypeName === "RenderVideo" && isRunningJob(job));
+  if (runningRender) return "Rendering";
+  const runningKeyframe = jobs.find((job) => job.jobTypeName === "GenerateShotStartImage" && isRunningJob(job));
+  if (runningKeyframe) return "Keyframe queued";
+  if (shot.startImageUrl || shot.startImagePath) return "Keyframe ready";
+  return "Needs keyframe";
+}
+
+function getStatusClass(status) {
+  if (status === "Rendered" || status === "Keyframe ready") return "badge-generated";
+  if (status === "Rendering" || status === "Keyframe queued") return "badge-rendering";
+  return "badge-pending";
+}
+
+function normalizePlanShots(plan) {
+  return (plan?.scenes || []).flatMap((scene) =>
+    (scene.shots || []).map((shot) => ({
+      ...shot,
+      sceneId: shot.sceneId || scene.id,
+      sceneIndex: scene.index ?? scene.sceneIndex,
+      sceneTitle: scene.title,
+      sceneSummary: scene.summary,
+      sceneLocation: scene.location,
+      sceneMood: scene.mood,
+      sceneRequiredCharacters: scene.requiredCharacters || [],
+      sceneDialogueLines: scene.dialogueLines || [],
+      index: shot.index ?? shot.shotIndex
+    }))
+  );
+}
+
+function selectedShotJobs(shot, jobs) {
+  if (!shot) return [];
+  return jobs
+    .filter((job) => job.sceneIndex === shot.sceneIndex && job.shotIndex === shot.index)
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+}
+
+function ShotRail({ shots, selectedShotId, jobsByKey, onSelectShot }) {
+  if (!shots.length) {
+    return (
+      <section className="storyboard-rail">
+        <h3>Shots</h3>
+        <p className="muted">No shots generated yet.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="storyboard-rail" aria-label="Storyboard shots">
+      <div className="row">
+        <h3>Shots</h3>
+        <span className="badge">{shots.length}</span>
+      </div>
+      <div className="storyboard-shot-rail-list">
+        {shots.map((shot) => {
+          const key = getShotKey(shot);
+          const status = getShotStatus(shot, jobsByKey.get(key) || []);
+          const isSelected = selectedShotId === shot.id;
+          const startUrl = getShotStartUrl(shot);
+          return (
+            <button
+              type="button"
+              className={`storyboard-shot-thumb ${isSelected ? "selected" : ""}`}
+              key={shot.id || key}
+              onClick={() => onSelectShot(shot.id)}
+            >
+              <span className="storyboard-shot-image">
+                {startUrl ? <img src={startUrl} alt={`Scene ${shot.sceneIndex} shot ${shot.index} keyframe`} /> : <span>Keyframe</span>}
+              </span>
+              <span className="storyboard-shot-meta">
+                <b>Scene {shot.sceneIndex} / Shot {shot.index}</b>
+                <small>{compactText(shot.action || shot.shotType || shot.sceneTitle || "Planned shot", 64)}</small>
+                <span className={`badge ${getStatusClass(status)}`}>{status}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ShotPreview({ shot, jobs, onUploadStartImage }) {
+  const startUrl = getShotStartUrl(shot);
+  const latestRender = jobs.find((job) => job.jobTypeName === "RenderVideo" && isCompletedJob(job));
+  const latestKeyframeJob = jobs.find((job) => job.jobTypeName === "GenerateShotStartImage");
+
+  if (!shot) {
+    return (
+      <section className="storyboard-preview-panel">
+        <div className="storyboard-empty-preview">
+          <h3>No shot selected</h3>
+          <p>Select a shot from the rail to review its keyframe and animation controls.</p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="storyboard-preview-panel">
+      <div className="storyboard-selected-head">
+        <div>
+          <span className="badge badge-ready">Selected Shot</span>
+          <h2>Scene {shot.sceneIndex} / Shot {shot.index}</h2>
+          <p className="muted">{shot.sceneTitle || shot.sceneSummary || "Storyboard shot"}</p>
+        </div>
+        {shot.durationSeconds || shot.targetDurationSeconds ? <span className="badge">{shot.durationSeconds || shot.targetDurationSeconds}s</span> : null}
+      </div>
+
+      <div className="storyboard-keyframe-stage">
+        {startUrl ? (
+          <img src={startUrl} alt={`Scene ${shot.sceneIndex} shot ${shot.index} keyframe`} />
+        ) : (
+          <div className="storyboard-empty-preview">
+            <h3>Generate or upload a shot keyframe before animating.</h3>
+            <p>Keyframes control the first frame when Image-to-Video is enabled.</p>
+          </div>
+        )}
+      </div>
+
+      <label className="file-control storyboard-upload">
+        Upload custom keyframe
+        <input
+          type="file"
+          accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) {
+              onUploadStartImage?.(shot.sceneId, shot.id, file);
+              event.target.value = "";
+            }
+          }}
+        />
+      </label>
+
+      <div className="storyboard-shot-notes">
+        <div>
+          <h3>Shot Direction</h3>
+          <p>{shot.action || shot.description || "No shot action available yet."}</p>
+          <p className="muted">
+            {shot.shotType || "Shot"} {shot.cameraMotion || shot.cameraDirection ? `with ${shot.cameraMotion || shot.cameraDirection}` : ""}
+          </p>
+        </div>
+        <div>
+          <h3>Narration / Dialogue</h3>
+          {shot.sceneDialogueLines?.length ? (
+            shot.sceneDialogueLines.slice(0, 3).map((line, index) => (
+              <p key={`${shot.id}-dialogue-${index}`}>
+                <b>{line.speaker || "Line"}:</b> {line.text}
+              </p>
+            ))
+          ) : (
+            <p className="muted">{shot.audioCue || "No dialogue lines are assigned to this scene."}</p>
+          )}
+        </div>
+      </div>
+
+      <div className="storyboard-history">
+        <h3>Generation History</h3>
+        {latestKeyframeJob ? (
+          <p>
+            Keyframe: <span className={`badge badge-${String(statusLabel(latestKeyframeJob.status)).toLowerCase()}`}>{statusLabel(latestKeyframeJob.status)}</span>
+          </p>
+        ) : (
+          <p className="muted">No keyframe generation job yet.</p>
+        )}
+        {latestRender ? (
+          <p>
+            Render: <a href={latestRender.outputUrl ? toAbsoluteApiUrl(latestRender.outputUrl) : undefined} target="_blank" rel="noreferrer">Completed video</a>
+          </p>
+        ) : (
+          <p className="muted">No completed render for this shot yet.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ShotInspector({
+  shot,
+  jobs,
+  useShotStartImage,
+  useCharacterReferenceInPrompt,
+  hasAnyShotStartImage,
+  isBusy,
+  hasRunningRenderVideo,
+  onUseShotStartImageChange,
+  onUseCharacterReferenceChange,
+  onSaveShotPrompt,
+  onGenerateShotStartImage,
+  onAnimateSelected,
+  onAnimateAll
+}) {
+  const [draft, setDraft] = useState({ startImagePrompt: "", startImageNegativePrompt: "" });
+
+  useEffect(() => {
+    setDraft({
+      sceneId: shot?.sceneId,
+      startImagePrompt: shot?.startImagePrompt || "",
+      startImageNegativePrompt: shot?.startImageNegativePrompt || ""
+    });
+  }, [shot]);
+
+  if (!shot) {
+    return (
+      <aside className="storyboard-inspector">
+        <h3>Shot Inspector</h3>
+        <p className="muted">Select a shot to edit prompts and animate it.</p>
+      </aside>
+    );
+  }
+
+  const runningJob = jobs.find(isRunningJob);
+  const completedRender = jobs.find((job) => job.jobTypeName === "RenderVideo" && isCompletedJob(job));
+  const hasKeyframe = Boolean(shot.startImageUrl || shot.startImagePath);
+  const characters = shot.requiredCharacters || shot.sceneRequiredCharacters || [];
+
+  return (
+    <aside className="storyboard-inspector">
+      <div className="storyboard-inspector-section">
+        <div className="row">
+          <h3>Inspector</h3>
+          <span className={`badge ${hasKeyframe ? "badge-generated" : "badge-pending"}`}>{hasKeyframe ? "Keyframe ready" : "Needs keyframe"}</span>
+        </div>
+        <p className="muted">Wan2.2 animates from this shot keyframe when Image-to-Video is enabled.</p>
+      </div>
+
+      <div className="storyboard-inspector-section">
+        <h3>On-screen Characters</h3>
+        {characters.length ? (
+          <div className="storyboard-character-chips">
+            {characters.map((character) => <span key={character}>{character}</span>)}
+          </div>
+        ) : (
+          <p className="muted">No character list is attached to this shot.</p>
+        )}
+      </div>
+
+      <div className="storyboard-inspector-section">
+        <label className="check-control">
+          <input
+            type="checkbox"
+            checked={useCharacterReferenceInPrompt}
+            onChange={(event) => onUseCharacterReferenceChange(event.target.checked)}
+          />
+          Use character references in prompts
+        </label>
+        <label className="check-control">
+          <input
+            type="checkbox"
+            checked={useShotStartImage}
+            onChange={(event) => onUseShotStartImageChange(event.target.checked)}
+          />
+          Image-to-Video from keyframes
+        </label>
+        {hasAnyShotStartImage ? (
+          <p className={useShotStartImage ? "msg ok compact-msg" : "msg error compact-msg"}>
+            {useShotStartImage ? "Keyframes will be used for shots that have them." : "Keyframes exist, but rendering will stay Text-to-Video until this is enabled."}
+          </p>
+        ) : (
+          <p className="muted">Generate keyframes to control the first frame of each video shot.</p>
+        )}
+      </div>
+
+      <div className="storyboard-inspector-section">
+        <h3>Keyframe Prompt</h3>
+        <textarea
+          rows={6}
+          value={draft.startImagePrompt}
+          onChange={(event) => setDraft((current) => ({ ...current, startImagePrompt: event.target.value }))}
+          placeholder="Describe the shot keyframe..."
+        />
+        <textarea
+          rows={3}
+          value={draft.startImageNegativePrompt}
+          onChange={(event) => setDraft((current) => ({ ...current, startImageNegativePrompt: event.target.value }))}
+          placeholder="Negative prompt"
+        />
+        <div className="actions">
+          <button type="button" onClick={() => onSaveShotPrompt(shot.sceneId, shot.id, draft)}>
+            Save Prompt
+          </button>
+          <button type="button" disabled={!draft.startImagePrompt} onClick={() => copyText(draft.startImagePrompt)}>
+            Copy Prompt
+          </button>
+        </div>
+      </div>
+
+      <div className="storyboard-inspector-section">
+        <h3>Actions</h3>
+        <div className="actions column">
+          <button type="button" disabled={isBusy} onClick={() => onGenerateShotStartImage(shot.id)}>
+            Regenerate Keyframe
+          </button>
+          <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={() => onAnimateSelected(shot)}>
+            Animate Selected
+          </button>
+          <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onAnimateAll}>
+            Animate All Shots
+          </button>
+        </div>
+      </div>
+
+      <div className="storyboard-inspector-section">
+        <h3>Job Status</h3>
+        {runningJob ? <p>Current: <span className="badge badge-rendering">{statusLabel(runningJob.status)}</span></p> : null}
+        {completedRender ? <p>Rendered: <span className="badge badge-completed">Ready</span></p> : null}
+        {!runningJob && !completedRender ? <p className="muted">No render job for this shot yet.</p> : null}
+      </div>
+    </aside>
+  );
+}
+
+export default function StoryboardStep({
+  plan,
+  jobs,
+  selectedShotIds,
+  useShotStartImage,
+  useCharacterReferenceInPrompt,
+  hasAnyShotStartImage,
+  isBusy,
+  hasRunningRenderVideo,
+  onSelectShot,
+  onUseShotStartImageChange,
+  onUseCharacterReferenceChange,
+  onSaveShotPrompt,
+  onUploadStartImage,
+  onGenerateShotStartImages,
+  onGenerateShotStartImage,
+  onAnimateSelected,
+  onAnimateAll
+}) {
+  const shots = useMemo(() => normalizePlanShots(plan), [plan]);
+  const selectedShotId = selectedShotIds[0] || shots[0]?.id || null;
+  const selectedShot = shots.find((shot) => shot.id === selectedShotId) || shots[0] || null;
+  const jobsByKey = useMemo(() => {
+    const map = new Map();
+    for (const job of jobs || []) {
+      const key = `${job.sceneIndex ?? "-"}-${job.shotIndex ?? "-"}`;
+      const list = map.get(key) || [];
+      list.push(job);
+      map.set(key, list);
+    }
+    return map;
+  }, [jobs]);
+  const selectedJobs = selectedShotJobs(selectedShot, jobs || []);
+
+  if (!plan) {
+    return (
+      <section className="storyboard-empty-state">
+        <h2>Analyze your story first.</h2>
+        <p>The storyboard appears after Content creates scenes and shots.</p>
+      </section>
+    );
+  }
+
+  if (!shots.length) {
+    return (
+      <section className="storyboard-empty-state">
+        <h2>No shots generated yet.</h2>
+        <p>Refresh the production plan or analyze the story again to create storyboard shots.</p>
+      </section>
+    );
+  }
+
+  return (
+    <div className="creator-step-panel storyboard-step">
+      <section className="storyboard-step-head">
+        <div>
+          <span className="badge badge-ready">Storyboard</span>
+          <h2>Review keyframes and animate shots</h2>
+          <p>Choose a shot, refine its keyframe prompt, then animate selected shots through the existing render queue.</p>
+        </div>
+        <div className="storyboard-head-actions">
+          <button type="button" disabled={isBusy || !plan} onClick={onGenerateShotStartImages}>
+            Generate Keyframes
+          </button>
+          <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onAnimateAll}>
+            Animate All
+          </button>
+        </div>
+      </section>
+
+      {!hasAnyShotStartImage ? (
+        <p className="msg compact-msg storyboard-keyframe-note">Generate keyframes to control the first frame of each video shot.</p>
+      ) : null}
+
+      <div className="storyboard-editor-layout">
+        <ShotRail shots={shots} selectedShotId={selectedShot?.id} jobsByKey={jobsByKey} onSelectShot={onSelectShot} />
+        <ShotPreview shot={selectedShot} jobs={selectedJobs} onUploadStartImage={onUploadStartImage} />
+        <ShotInspector
+          shot={selectedShot}
+          jobs={selectedJobs}
+          useShotStartImage={useShotStartImage}
+          useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
+          hasAnyShotStartImage={hasAnyShotStartImage}
+          isBusy={isBusy}
+          hasRunningRenderVideo={hasRunningRenderVideo}
+          onUseShotStartImageChange={onUseShotStartImageChange}
+          onUseCharacterReferenceChange={onUseCharacterReferenceChange}
+          onSaveShotPrompt={onSaveShotPrompt}
+          onGenerateShotStartImage={onGenerateShotStartImage}
+          onAnimateSelected={onAnimateSelected}
+          onAnimateAll={onAnimateAll}
+        />
+      </div>
+
+      <details className="storyboard-monitor-details">
+        <summary>Advanced render job monitor</summary>
+        <div className="storyboard-job-list">
+          {selectedJobs.length ? (
+            selectedJobs.map((job) => (
+              <div className="job" key={job.jobId || job.id}>
+                <div className="row">
+                  <b>{job.jobTypeName || job.jobType}</b>
+                  <span className={`badge badge-${String(statusLabel(job.status)).toLowerCase()}`}>{statusLabel(job.status)}</span>
+                </div>
+                <p>Progress: {job.progress ?? 0}%</p>
+                {job.outputUrl ? (
+                  <a href={toAbsoluteApiUrl(job.outputUrl)} target="_blank" rel="noreferrer">
+                    Open output
+                  </a>
+                ) : null}
+                {job.errorMessage ? <p className="msg error">{job.errorMessage}</p> : null}
+              </div>
+            ))
+          ) : (
+            <p className="muted">No jobs for the selected shot yet.</p>
+          )}
+        </div>
+      </details>
+    </div>
+  );
+}

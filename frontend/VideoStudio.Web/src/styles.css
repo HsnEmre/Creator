@@ -741,6 +741,229 @@ body {
   box-shadow: none;
 }
 
+.storyboard-step {
+  gap: 14px;
+}
+
+.storyboard-step-head,
+.storyboard-empty-state,
+.storyboard-rail,
+.storyboard-preview-panel,
+.storyboard-inspector,
+.storyboard-monitor-details {
+  background: linear-gradient(160deg, rgba(21, 31, 45, 0.86), rgba(13, 20, 30, 0.76));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  box-shadow: 0 8px 22px rgba(2, 6, 12, 0.35);
+}
+
+.storyboard-step-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.storyboard-step-head h2,
+.storyboard-empty-state h2 {
+  margin: 10px 0 6px;
+  font-size: 30px;
+}
+
+.storyboard-step-head p,
+.storyboard-empty-state p {
+  max-width: 760px;
+  color: var(--muted);
+}
+
+.storyboard-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.storyboard-keyframe-note {
+  border: 1px solid rgba(255, 199, 95, 0.35);
+  background: rgba(255, 199, 95, 0.1);
+}
+
+.storyboard-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(280px, 360px);
+  gap: 12px;
+  align-items: start;
+}
+
+.storyboard-rail,
+.storyboard-inspector {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+
+.storyboard-shot-rail-list,
+.storyboard-inspector,
+.storyboard-inspector-section,
+.storyboard-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.storyboard-shot-thumb {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  text-align: left;
+  background: rgba(10, 15, 24, 0.72);
+}
+
+.storyboard-shot-thumb.selected {
+  border-color: rgba(92, 197, 255, 0.82);
+  background: rgba(44, 91, 126, 0.32);
+}
+
+.storyboard-shot-image {
+  display: grid;
+  place-items: center;
+  width: 82px;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid rgba(92, 197, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(6, 10, 16, 0.84);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.storyboard-shot-image img,
+.storyboard-keyframe-stage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.storyboard-shot-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.storyboard-shot-meta small {
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.storyboard-preview-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.storyboard-selected-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.storyboard-selected-head h2 {
+  margin: 8px 0 4px;
+  font-size: 28px;
+}
+
+.storyboard-keyframe-stage {
+  display: grid;
+  place-items: center;
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid rgba(92, 197, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(5, 9, 15, 0.78);
+}
+
+.storyboard-empty-preview {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 260px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.storyboard-empty-preview h3 {
+  color: var(--text);
+}
+
+.storyboard-upload {
+  width: fit-content;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(10, 15, 24, 0.72);
+}
+
+.storyboard-shot-notes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.storyboard-shot-notes > div,
+.storyboard-history,
+.storyboard-inspector-section {
+  padding: 12px;
+  border: 1px solid rgba(92, 197, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 15, 24, 0.58);
+}
+
+.storyboard-character-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.storyboard-character-chips span {
+  padding: 5px 8px;
+  border: 1px solid rgba(92, 197, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(92, 197, 255, 0.1);
+  font-size: 12px;
+}
+
+.storyboard-inspector textarea {
+  margin-bottom: 8px;
+}
+
+.storyboard-monitor-details {
+  padding: 12px;
+}
+
+.storyboard-monitor-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.storyboard-job-list {
+  margin-top: 10px;
+}
+
+.storyboard-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 320px;
+  text-align: center;
+  border-style: dashed;
+}
+
 .storyboard-workspace {
   display: grid;
   grid-template-columns: minmax(220px, 0.4fr) minmax(0, 1fr);
@@ -1156,12 +1379,16 @@ audio {
   .content-plan-stats,
   .cast-hero,
   .cast-hero-stats,
-  .cast-explainer {
+  .cast-explainer,
+  .storyboard-editor-layout,
+  .storyboard-shot-notes {
     grid-template-columns: 1fr;
   }
 
   .production-monitor,
-  .creator-rail {
+  .creator-rail,
+  .storyboard-rail,
+  .storyboard-inspector {
     position: static;
     max-height: none;
     overflow: visible;

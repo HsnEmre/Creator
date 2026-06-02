@@ -30,16 +30,12 @@ import {
 } from "../api/client";
 import ContentStep from "../components/ContentStep";
 import CastStep from "../components/CastStep";
+import StoryboardStep from "../components/StoryboardStep";
 import RenderJobsPanel from "../components/RenderJobsPanel";
 import DialogueLinesPanel from "../components/DialogueLinesPanel";
 import VideoPreviewPanel from "../components/VideoPreviewPanel";
 import CreatorShell from "../components/CreatorShell";
-import SceneListPanel from "../components/SceneListPanel";
-import SceneEditorPanel from "../components/SceneEditorPanel";
-import ShotEditorPanel from "../components/ShotEditorPanel";
-import ShotSelectionToolbar from "../components/ShotSelectionToolbar";
 import AssemblyPanel from "../components/AssemblyPanel";
-import VisualPreparationPanel from "../components/VisualPreparationPanel";
 
 const VISUAL_JOB_TYPES = new Set(["GenerateCharacterReferenceImage", "GenerateShotStartImage"]);
 
@@ -316,6 +312,43 @@ export default function ProjectDetailPage() {
 
   function onRenderAll() {
     return renderWithPayload({ maxShots: 9999 }, "All shots");
+  }
+
+  function onSelectStoryboardShot(shotId) {
+    setSelectedShotIds(shotId ? [shotId] : []);
+  }
+
+  function onRenderStoryboardSelected(shot) {
+    if (!shot?.id) {
+      setError("Select a shot before animating.");
+      return undefined;
+    }
+    const selectedHasKeyframe = Boolean(shot.startImageUrl || shot.startImagePath);
+    if (selectedHasKeyframe && !useShotStartImage) {
+      setUseShotStartImage(true);
+    }
+    setSelectedShotIds([shot.id]);
+    return renderWithPayload(
+      {
+        shotIds: [shot.id],
+        useShotStartImage: selectedHasKeyframe || useShotStartImage
+      },
+      "Selected shot"
+    );
+  }
+
+  function onRenderStoryboardAll() {
+    if (hasAnyShotStartImage && !useShotStartImage) {
+      setUseShotStartImage(true);
+    }
+    return renderWithPayload(
+      {
+        maxShots: 9999,
+        force: false,
+        useShotStartImage: hasAnyShotStartImage || useShotStartImage
+      },
+      "All shots"
+    );
   }
 
   function onUploadReference(characterId, file) {
@@ -631,94 +664,25 @@ export default function ProjectDetailPage() {
         ) : null}
 
         {selectedStep === "storyboard" ? (
-          <div className="creator-step-panel">
-            <section className="creator-step-intro">
-              <span className="badge">{renderStatus}</span>
-              <h2>Storyboard</h2>
-              <p className="muted">Review shots, generate keyframes, and animate selected shots through the existing RenderJob queue.</p>
-            </section>
-            <section className="card compact-card">
-              <h2>Image-to-Video</h2>
-              <label className="check-control">
-                <input
-                  type="checkbox"
-                  checked={useCharacterReferenceInPrompt}
-                  onChange={(event) => setUseCharacterReferenceInPrompt(event.target.checked)}
-                />
-                Use character references in compiled prompts
-              </label>
-              <label className="check-control">
-                <input
-                  type="checkbox"
-                  checked={useShotStartImage}
-                  onChange={(event) => onUseShotStartImageChange(event.target.checked)}
-                />
-                Animate from shot start images when available
-              </label>
-              {hasAnyShotStartImage ? (
-                useShotStartImage ? (
-                  <p className="msg ok compact-msg">
-                    Image-to-Video is enabled. Shots with keyframes will send those images to Wan2.2 as start frames.
-                  </p>
-                ) : (
-                  <p className="msg error compact-msg">
-                    Keyframes are available, but Image-to-Video is disabled. Rendering will stay Text-to-Video.
-                  </p>
-                )
-              ) : (
-                <p className="muted compact-msg">No shot keyframes are available yet. Rendering will use Text-to-Video.</p>
-              )}
-              <div className="actions">
-                <button disabled={Boolean(busyAction) || !plan} onClick={onPrepareVisuals}>
-                  {busyAction === "prepare-visuals" ? "Preparing..." : "Prepare Keyframe Prompts"}
-                </button>
-                <button disabled={Boolean(busyAction) || !plan} onClick={onGenerateShotStartImages}>
-                  {busyAction === "generate-shot-start-images" ? "Queueing..." : "Generate Shot Keyframes"}
-                </button>
-                <button disabled={Boolean(busyAction) || !plan} onClick={onRegenerateMissingVisuals}>
-                  {busyAction === "regenerate-missing-visuals" ? "Queueing..." : "Regenerate Missing Visuals"}
-                </button>
-                <button disabled={Boolean(busyAction) || hasRunningRenderVideo} onClick={onRenderFastPreview}>
-                  {busyAction === "render" ? "Queueing..." : "Render FastPreview (1 Shot)"}
-                </button>
-              </div>
-            </section>
-            <div className="storyboard-workspace">
-              <SceneListPanel scenes={scenes} selectedSceneId={selectedScene?.id} onSelectScene={setSelectedSceneId} />
-              <div className="storyboard-main-stack">
-                <SceneEditorPanel scene={selectedScene} onSave={onSaveScene} />
-                <ShotSelectionToolbar
-                  selectedCount={selectedShotIds.length}
-                  isBusy={Boolean(busyAction) || hasRunningRenderVideo}
-                  onRenderSelected={onRenderSelected}
-                  onRenderScene={onRenderScene}
-                  onRenderAll={onRenderAll}
-                />
-                <ShotEditorPanel
-                  scene={selectedScene}
-                  shots={selectedSceneShots}
-                  selectedShotIds={selectedShotIds}
-                  onToggleShot={onToggleShot}
-                  onSaveShot={onSaveShot}
-                  onUploadStartImage={onUploadStartImage}
-                />
-              </div>
-            </div>
-            <VisualPreparationPanel
-              mode="shots"
-              plan={visualPlan}
-              selectedScene={selectedScene}
-              selectedShotIds={selectedShotIds}
-              onSaveCharacterPrompt={onSaveCharacterPrompt}
-              onSaveShotPrompt={onSaveShotPrompt}
-              onUploadReference={onUploadReference}
-              onUploadStartImage={onUploadStartImage}
-              onGenerateCharacterReference={onGenerateCharacterReference}
-              onGenerateShotStartImage={onGenerateShotStartImage}
-              useShotStartImage={useShotStartImage}
-              hasAnyShotStartImage={hasAnyShotStartImage}
-            />
-          </div>
+          <StoryboardStep
+            plan={visualPlan}
+            jobs={jobs}
+            selectedShotIds={selectedShotIds}
+            useShotStartImage={useShotStartImage}
+            useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
+            hasAnyShotStartImage={hasAnyShotStartImage}
+            isBusy={Boolean(busyAction)}
+            hasRunningRenderVideo={hasRunningRenderVideo}
+            onSelectShot={onSelectStoryboardShot}
+            onUseShotStartImageChange={onUseShotStartImageChange}
+            onUseCharacterReferenceChange={setUseCharacterReferenceInPrompt}
+            onSaveShotPrompt={onSaveShotPrompt}
+            onUploadStartImage={onUploadStartImage}
+            onGenerateShotStartImages={onGenerateShotStartImages}
+            onGenerateShotStartImage={onGenerateShotStartImage}
+            onAnimateSelected={onRenderStoryboardSelected}
+            onAnimateAll={onRenderStoryboardAll}
+          />
         ) : null}
 
         {selectedStep === "edit" ? (
