@@ -543,6 +543,204 @@ body {
   box-shadow: none;
 }
 
+.cast-step {
+  gap: 16px;
+}
+
+.cast-hero,
+.cast-actions-card,
+.cast-empty-state,
+.cast-explainer,
+.cast-advanced-panel {
+  background: linear-gradient(160deg, rgba(21, 31, 45, 0.86), rgba(13, 20, 30, 0.76));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 8px 22px rgba(2, 6, 12, 0.35);
+}
+
+.cast-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.55fr);
+  gap: 18px;
+  align-items: end;
+}
+
+.cast-hero h2 {
+  margin: 10px 0 6px;
+  font-size: 32px;
+}
+
+.cast-hero p {
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.cast-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cast-hero-stats span {
+  display: grid;
+  gap: 3px;
+  min-height: 74px;
+  padding: 12px;
+  border: 1px solid rgba(92, 197, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(10, 15, 24, 0.68);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cast-hero-stats b {
+  color: var(--text);
+  font-size: 26px;
+}
+
+.cast-actions-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.cast-reference-warning {
+  flex-basis: 100%;
+  border: 1px solid rgba(255, 199, 95, 0.35);
+  background: rgba(255, 199, 95, 0.1);
+}
+
+.cast-character-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.cast-character-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+  padding: 12px;
+  border: 1px solid rgba(92, 197, 255, 0.18);
+  border-radius: 8px;
+  background: linear-gradient(160deg, rgba(17, 27, 40, 0.92), rgba(9, 15, 23, 0.84));
+  box-shadow: 0 8px 20px rgba(2, 6, 12, 0.28);
+}
+
+.cast-reference-frame {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid rgba(92, 197, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(5, 9, 15, 0.78);
+}
+
+.cast-reference-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cast-reference-empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--muted);
+  background:
+    linear-gradient(135deg, rgba(92, 197, 255, 0.1), transparent 35%),
+    rgba(10, 15, 24, 0.82);
+}
+
+.cast-reference-empty span {
+  padding: 6px 10px;
+  border: 1px dashed rgba(149, 165, 191, 0.4);
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.cast-character-body {
+  display: grid;
+  gap: 8px;
+  flex: 1;
+}
+
+.cast-character-body h3 {
+  margin-bottom: 2px;
+}
+
+.cast-visual-lock {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(10, 15, 24, 0.58);
+  color: #c8e3ff;
+  font-size: 12px;
+}
+
+.cast-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cast-upload-button {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(10, 15, 24, 0.7);
+}
+
+.cast-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  text-align: center;
+  border-style: dashed;
+}
+
+.cast-empty-state p {
+  max-width: 520px;
+  color: var(--muted);
+}
+
+.cast-explainer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cast-explainer > div {
+  padding: 12px;
+  border: 1px solid rgba(92, 197, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 15, 24, 0.58);
+}
+
+.cast-advanced-panel {
+  padding: 12px;
+}
+
+.cast-advanced-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.cast-advanced-panel > .card {
+  margin-top: 10px;
+  box-shadow: none;
+}
+
 .storyboard-workspace {
   display: grid;
   grid-template-columns: minmax(220px, 0.4fr) minmax(0, 1fr);
@@ -955,7 +1153,10 @@ audio {
   .creator-content-grid,
   .storyboard-workspace,
   .content-option-grid,
-  .content-plan-stats {
+  .content-plan-stats,
+  .cast-hero,
+  .cast-hero-stats,
+  .cast-explainer {
     grid-template-columns: 1fr;
   }
 

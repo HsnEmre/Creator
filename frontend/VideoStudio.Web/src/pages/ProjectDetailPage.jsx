@@ -29,10 +29,10 @@ import {
   uploadShotStartImage
 } from "../api/client";
 import ContentStep from "../components/ContentStep";
+import CastStep from "../components/CastStep";
 import RenderJobsPanel from "../components/RenderJobsPanel";
 import DialogueLinesPanel from "../components/DialogueLinesPanel";
 import VideoPreviewPanel from "../components/VideoPreviewPanel";
-import CharacterList from "../components/CharacterList";
 import CreatorShell from "../components/CreatorShell";
 import SceneListPanel from "../components/SceneListPanel";
 import SceneEditorPanel from "../components/SceneEditorPanel";
@@ -511,8 +511,6 @@ export default function ProjectDetailPage() {
   const completedAudioCount = dialogueLines.filter((line) => line.audioUrl || line.audioPath).length;
   const hasAssembly = completedJobs.some((job) => job.jobTypeName === "AssembleVideo") || Boolean(finalVideo?.assembledMediaUrl);
   const hasFinal = completedJobs.some((job) => job.jobTypeName === "MuxAudio") || Boolean(finalVideo?.mediaUrl);
-  const characterStatus = characterCount ? "Done" : plan ? "Ready" : "Waiting";
-  const referenceStatus = characterReferenceCount ? "Done" : characterCount ? "Ready" : "Waiting";
   const keyframeStatus = shotStartImageCount ? "Done" : shotCount ? "Ready" : "Waiting";
   const renderStatus = hasRunningRenderVideo ? "Running" : completedRenderCount ? "Done" : shotCount ? "Ready" : "Waiting";
   const assemblyStatus = hasAssembly ? "Done" : completedRenderCount ? "Ready" : "Waiting";
@@ -619,40 +617,17 @@ export default function ProjectDetailPage() {
         ) : null}
 
         {selectedStep === "cast" ? (
-          <div className="creator-step-panel">
-            <section className="creator-step-intro">
-              <span className="badge">{referenceStatus}</span>
-              <h2>Cast</h2>
-              <p className="muted">
-                Review detected characters and create identity references. Character references guide prompts; they are not Wan2.2 start frames.
-              </p>
-            </section>
-            <section className="card compact-card">
-              <div className="actions">
-                <button disabled={Boolean(busyAction) || !plan} onClick={onPrepareVisuals}>
-                  {busyAction === "prepare-visuals" ? "Preparing..." : "Prepare Visual Prompts"}
-                </button>
-                <button disabled={Boolean(busyAction) || !plan} onClick={onGenerateCharacterReferences}>
-                  {busyAction === "generate-character-references" ? "Queueing..." : "Generate Character References"}
-                </button>
-              </div>
-            </section>
-            <CharacterList characters={visualPlan?.characters || []} onUploadReference={onUploadReference} showReferenceTools={false} />
-            <VisualPreparationPanel
-              mode="characters"
-              plan={visualPlan}
-              selectedScene={selectedScene}
-              selectedShotIds={selectedShotIds}
-              onSaveCharacterPrompt={onSaveCharacterPrompt}
-              onSaveShotPrompt={onSaveShotPrompt}
-              onUploadReference={onUploadReference}
-              onUploadStartImage={onUploadStartImage}
-              onGenerateCharacterReference={onGenerateCharacterReference}
-              onGenerateShotStartImage={onGenerateShotStartImage}
-              useShotStartImage={useShotStartImage}
-              hasAnyShotStartImage={hasAnyShotStartImage}
-            />
-          </div>
+          <CastStep
+            plan={visualPlan}
+            isBusy={Boolean(busyAction)}
+            busyAction={busyAction}
+            onPrepareVisuals={onPrepareVisuals}
+            onGenerateCharacterReferences={onGenerateCharacterReferences}
+            onGenerateCharacterReference={onGenerateCharacterReference}
+            onUploadReference={onUploadReference}
+            onSaveCharacterPrompt={onSaveCharacterPrompt}
+            onNext={() => setSelectedStep("storyboard")}
+          />
         ) : null}
 
         {selectedStep === "storyboard" ? (
