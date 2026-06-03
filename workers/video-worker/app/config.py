@@ -25,6 +25,7 @@ class Settings:
     wan22_default_convert_model_dtype: bool
     wan22_default_t5_cpu: bool
     wan22_vae_dtype: str
+    wan22_torch_optimize: bool
     wan22_timeout_seconds: int
     ffmpeg_path: str
     placeholder_outputs: bool
@@ -36,6 +37,7 @@ class Settings:
     sdxl_num_inference_steps: int
     sdxl_guidance_scale: float
     sdxl_enable_cpu_offload: bool
+    sdxl_unload_after_job: bool
     image_output_dir: str
     performance_diagnostics: bool
     tts_provider: str
@@ -67,6 +69,7 @@ class Settings:
             wan22_default_convert_model_dtype=_bool(os.getenv("WAN22_DEFAULT_CONVERT_MODEL_DTYPE", "true"), True),
             wan22_default_t5_cpu=_bool(os.getenv("WAN22_DEFAULT_T5_CPU", "true"), True),
             wan22_vae_dtype=os.getenv("WAN22_VAE_DTYPE", ""),
+            wan22_torch_optimize=_bool(os.getenv("WAN22_TORCH_OPTIMIZE", "false"), False),
             wan22_timeout_seconds=int(os.getenv("WAN22_TIMEOUT_SECONDS", "7200")),
             ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
             placeholder_outputs=_bool(os.getenv("VIDEOSTUDIO_PLACEHOLDER_OUTPUTS", "false"), False),
@@ -78,6 +81,7 @@ class Settings:
             sdxl_num_inference_steps=int(os.getenv("SDXL_NUM_INFERENCE_STEPS", "20")),
             sdxl_guidance_scale=float(os.getenv("SDXL_GUIDANCE_SCALE", "7.0")),
             sdxl_enable_cpu_offload=_bool(os.getenv("SDXL_ENABLE_CPU_OFFLOAD", "true"), True),
+            sdxl_unload_after_job=_bool(os.getenv("SDXL_UNLOAD_AFTER_JOB", "false"), False),
             image_output_dir=os.getenv("IMAGE_OUTPUT_DIR", str((worker_root.parent.parent / "storage" / "assets").resolve())),
             performance_diagnostics=_bool(os.getenv("VIDEO_WORKER_PERF_LOG", os.getenv("VIDEOSTUDIO_PERF_LOG", "false")), False),
             tts_provider=os.getenv("TTS_PROVIDER", "EdgeTTS"),

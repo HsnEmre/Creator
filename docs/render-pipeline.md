@@ -176,7 +176,7 @@ Future provider names such as `FLUX_DEV`, `FLUX_KONTEXT`, and `HIDREAM` are rese
 
 34. Portrait-only references may produce static portrait videos if used as start frames.
 
-### Wan2.2 VAE Decode Diagnostics
+### Wan2.2 Performance Diagnostics and Tuning
 
 When worker performance diagnostics are enabled with `VIDEO_WORKER_PERF_LOG=true`, the worker sets `WAN_PERF_LOG=1` for the local Wan2.2 subprocess. Wan2.2 then emits grep-friendly timing lines:
 
@@ -186,16 +186,26 @@ When worker performance diagnostics are enabled with `VIDEO_WORKER_PERF_LOG=true
 [wan-perf] event=vae_decode_internal_summary ...
 ```
 
-Optional VAE dtype A/B testing is available through `WAN22_VAE_DTYPE` in the worker environment. Leave it unset to preserve default Wan2.2 behavior. Supported test values are `bf16`, `fp16`, and `fp32`.
+Deep per-chunk VAE profiling can add CUDA synchronization overhead. It should only be enabled with `WAN_DEEP_VAE_PROFILE=1` during targeted local tests. Normal `VIDEO_WORKER_PERF_LOG=true` diagnostics should remain coarse enough to avoid materially changing render timing.
+
+Optional runtime switches are available for local A/B testing. Leave them unset or `false` to preserve current behavior:
+
+| Setting | Default | Purpose |
+| ------- | ------- | ------- |
+| `WAN22_TORCH_OPTIMIZE=true` | `false` | Passes `WAN_TORCH_OPTIMIZE=1` to Wan2.2 so `generate.py` enables TF32 matmul, cuDNN TF32, cuDNN benchmark, and high float32 matmul precision when supported. |
+| `SDXL_UNLOAD_AFTER_JOB=true` | `false` | Releases the cached SDXL pipeline after character reference or shot start image jobs, then runs garbage collection and CUDA cache cleanup. This can reduce RAM/VRAM pressure before Wan2.2 jobs at the cost of reloading SDXL for the next image job. |
+| `WAN22_VAE_DTYPE=fp16` / `bf16` / `fp32` | unset | Experimental VAE dtype override. Leave unset for Wan2.2 default behavior. |
+| `WAN22_DEFAULT_OFFLOAD_MODEL=false` | `true` | Risky memory/performance test. Keeping more model state on GPU can reduce transfer overhead but may OOM on 16GB VRAM. |
 
 Recommended local A/B tests, without changing defaults:
 
 | Test | Worker environment | Record |
 | ---- | ------------------ | ------ |
-| A | `WAN22_VAE_DTYPE` unset | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
-| B | `WAN22_VAE_DTYPE=bf16` | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
-| C | `WAN22_VAE_DTYPE=fp16` | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
-| D | `WAN22_VAE_DTYPE=bf16` and `WAN22_DEFAULT_OFFLOAD_MODEL=false` only if B is stable | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
+| A | baseline defaults | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
+| B | `WAN22_TORCH_OPTIMIZE=true` | Same metrics as A |
+| C | `SDXL_UNLOAD_AFTER_JOB=true` and `WAN22_TORCH_OPTIMIZE=true` | Same metrics as A, plus SDXL reload cost for later image jobs |
+| D | `WAN22_VAE_DTYPE=fp16` only after B/C | Same metrics as A |
+| E | `WAN22_DEFAULT_OFFLOAD_MODEL=false` only as a risky test because 16GB VRAM may OOM | Same metrics as A |
 
 Do not change quality or offload defaults until diagnostics show the real bottleneck and stability tradeoff.
 

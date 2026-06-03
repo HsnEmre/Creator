@@ -64,20 +64,23 @@ class RenderJobHandler:
             if job_type in {"GenerateCharacterReferenceImage", "GenerateShotStartImage"}:
                 image_request = ImageGenerationRequest.from_job(job)
                 self.api.update_progress(job_id, 10)
-                with timed(
-                    "image_generation_duration",
-                    job_id=job_id,
-                    project_id=request.project_id,
-                    job_type=job_type,
-                    generation_type=image_request.generation_type,
-                    output_resolution=f"{image_request.width}x{image_request.height}",
-                    sample_steps=self.settings.sdxl_num_inference_steps,
-                    guidance_cfg=self.settings.sdxl_guidance_scale,
-                    dtype="float16",
-                    device=self.settings.sdxl_device,
-                    **cuda_memory_snapshot("before_image_generation"),
-                ):
-                    result = self.image_adapter.generate(image_request)
+                try:
+                    with timed(
+                        "image_generation_duration",
+                        job_id=job_id,
+                        project_id=request.project_id,
+                        job_type=job_type,
+                        generation_type=image_request.generation_type,
+                        output_resolution=f"{image_request.width}x{image_request.height}",
+                        sample_steps=self.settings.sdxl_num_inference_steps,
+                        guidance_cfg=self.settings.sdxl_guidance_scale,
+                        dtype="float16",
+                        device=self.settings.sdxl_device,
+                        **cuda_memory_snapshot("before_image_generation"),
+                    ):
+                        result = self.image_adapter.generate(image_request)
+                finally:
+                    self._maybe_unload_image_pipeline(job_id, request.project_id, job_type)
                 self.api.update_progress(job_id, 90)
                 if result.success:
                     self.api.update_progress(job_id, 100)
@@ -195,4 +198,30 @@ class RenderJobHandler:
             "device": "external_wan_generate_py",
             "offload_model": self.settings.wan22_default_offload_model,
             "t5_cpu": self.settings.wan22_default_t5_cpu,
+            "wan_torch_optimize": self.settings.wan22_torch_optimize,
         }
+
+    def _maybe_unload_image_pipeline(self, job_id: str, project_id: str, job_type: str) -> None:
+        if not self.settings.sdxl_unload_after_job:
+            return
+
+        unload = getattr(self.image_adapter, "unload_pipeline", None)
+        if not callable(unload):
+            log_perf(
+                "sdxl_pipeline_unload_skipped",
+                job_id=job_id,
+                project_id=project_id,
+                job_type=job_type,
+                image_model_provider=self.settings.image_model_provider,
+                reason="adapter_has_no_unload_pipeline",
+            )
+            return
+
+        with timed(
+            "sdxl_pipeline_unload_duration",
+            job_id=job_id,
+            project_id=project_id,
+            job_type=job_type,
+            image_model_provider=self.settings.image_model_provider,
+        ):
+            unload()

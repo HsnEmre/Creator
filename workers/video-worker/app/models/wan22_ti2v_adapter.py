@@ -43,6 +43,7 @@ class Wan22TI2VAdapter:
             t5_cpu=self.settings.wan22_default_t5_cpu,
             offload_model=self.settings.wan22_default_offload_model,
             vae_dtype=self.settings.wan22_vae_dtype or "wan_default",
+            wan_torch_optimize=self.settings.wan22_torch_optimize,
             command_build_duration_seconds=elapsed_seconds(command_build_start),
             wan_pipeline_initialization_duration_seconds="unavailable_external_subprocess",
             wan_model_load_duration_seconds="included_in_subprocess_duration",
@@ -154,6 +155,8 @@ class Wan22TI2VAdapter:
             process_env["WAN_PERF_LOG"] = "1"
         if self.settings.wan22_vae_dtype:
             process_env["WAN_VAE_DTYPE"] = self.settings.wan22_vae_dtype
+        if self.settings.wan22_torch_optimize:
+            process_env["WAN_TORCH_OPTIMIZE"] = "1"
         subprocess_start = now()
         log_perf(
             "wan_subprocess_starting",
@@ -168,6 +171,7 @@ class Wan22TI2VAdapter:
             t5_cpu="--t5_cpu" in command,
             wan_perf_log=process_env.get("WAN_PERF_LOG", "0"),
             wan_vae_dtype=process_env.get("WAN_VAE_DTYPE", "wan_default"),
+            wan_torch_optimize=process_env.get("WAN_TORCH_OPTIMIZE", "0"),
             cwd=self.settings.wan22_repo_dir,
             **torch_diagnostics(),
             **cuda_memory_snapshot("before_wan_subprocess"),

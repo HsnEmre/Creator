@@ -1,3 +1,4 @@
+import gc
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -125,3 +126,28 @@ class SDXLImageAdapter:
 
         device = self.settings.sdxl_device if not self.settings.sdxl_enable_cpu_offload else "cpu"
         return torch.Generator(device=device).manual_seed(seed)
+
+    @classmethod
+    def unload_pipeline(cls) -> None:
+        had_pipeline = cls._pipeline is not None
+        cls._pipeline = None
+        gc.collect()
+
+        cuda_available = False
+        try:
+            import torch
+
+            cuda_available = torch.cuda.is_available()
+            if cuda_available:
+                torch.cuda.empty_cache()
+        except Exception as exc:
+            logging.warning("SDXL cache unload completed with CUDA cleanup warning: %s", exc)
+            log_perf("sdxl_pipeline_unload_warning", had_pipeline=had_pipeline, error_message=str(exc))
+            return
+
+        log_perf(
+            "sdxl_pipeline_unloaded",
+            had_pipeline=had_pipeline,
+            cuda_available=cuda_available,
+            **cuda_memory_snapshot("after_sdxl_unload"),
+        )
