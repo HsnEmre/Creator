@@ -42,6 +42,7 @@ class Wan22TI2VAdapter:
             device="external_wan_generate_py",
             t5_cpu=self.settings.wan22_default_t5_cpu,
             offload_model=self.settings.wan22_default_offload_model,
+            vae_dtype=self.settings.wan22_vae_dtype or "wan_default",
             command_build_duration_seconds=elapsed_seconds(command_build_start),
             wan_pipeline_initialization_duration_seconds="unavailable_external_subprocess",
             wan_model_load_duration_seconds="included_in_subprocess_duration",
@@ -151,6 +152,8 @@ class Wan22TI2VAdapter:
         process_env["PYTHONUTF8"] = "1"
         if self.settings.performance_diagnostics:
             process_env["WAN_PERF_LOG"] = "1"
+        if self.settings.wan22_vae_dtype:
+            process_env["WAN_VAE_DTYPE"] = self.settings.wan22_vae_dtype
         process = subprocess.Popen(
             command,
             cwd=self.settings.wan22_repo_dir,

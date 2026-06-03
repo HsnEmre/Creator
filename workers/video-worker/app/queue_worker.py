@@ -40,6 +40,7 @@ class QueueWorker:
         logging.info("WAN22_OUTPUT_DIR=%s", self.settings.wan22_output_dir)
         logging.info("WAN22_DEFAULT_FRAME_NUM=%s", self.settings.wan22_default_frame_num)
         logging.info("WAN22_DEFAULT_SAMPLE_STEPS=%s", self.settings.wan22_default_sample_steps)
+        logging.info("WAN22_VAE_DTYPE=%s", self.settings.wan22_vae_dtype or "(default)")
         logging.info("VIDEOSTUDIO_PLACEHOLDER_OUTPUTS=%s", self.settings.placeholder_outputs)
         logging.info("IMAGE_MODEL_PROVIDER=%s", self.settings.image_model_provider)
         logging.info("SDXL_MODEL_PATH=%s", self.settings.sdxl_model_path)

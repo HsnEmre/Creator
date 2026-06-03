@@ -176,6 +176,29 @@ Future provider names such as `FLUX_DEV`, `FLUX_KONTEXT`, and `HIDREAM` are rese
 
 34. Portrait-only references may produce static portrait videos if used as start frames.
 
+### Wan2.2 VAE Decode Diagnostics
+
+When worker performance diagnostics are enabled with `VIDEO_WORKER_PERF_LOG=true`, the worker sets `WAN_PERF_LOG=1` for the local Wan2.2 subprocess. Wan2.2 then emits grep-friendly timing lines:
+
+```text
+[wan-perf] event=vae_decode_chunk_completed ...
+[wan-perf] event=vae_decode_concat_completed ...
+[wan-perf] event=vae_decode_internal_summary ...
+```
+
+Optional VAE dtype A/B testing is available through `WAN22_VAE_DTYPE` in the worker environment. Leave it unset to preserve default Wan2.2 behavior. Supported test values are `bf16`, `fp16`, and `fp32`.
+
+Recommended local A/B tests, without changing defaults:
+
+| Test | Worker environment | Record |
+| ---- | ------------------ | ------ |
+| A | `WAN22_VAE_DTYPE` unset | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
+| B | `WAN22_VAE_DTYPE=bf16` | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
+| C | `WAN22_VAE_DTYPE=fp16` | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
+| D | `WAN22_VAE_DTYPE=bf16` and `WAN22_DEFAULT_OFFLOAD_MODEL=false` only if B is stable | VAE decode duration, sampling duration, total render duration, peak allocated/reserved VRAM, valid output, OOM status |
+
+Do not change quality or offload defaults until diagnostics show the real bottleneck and stability tradeoff.
+
 ---
 
 ## Assembly and Finalization

@@ -24,6 +24,7 @@ class Settings:
     wan22_default_offload_model: bool
     wan22_default_convert_model_dtype: bool
     wan22_default_t5_cpu: bool
+    wan22_vae_dtype: str
     wan22_timeout_seconds: int
     ffmpeg_path: str
     placeholder_outputs: bool
@@ -65,6 +66,7 @@ class Settings:
             wan22_default_offload_model=_bool(os.getenv("WAN22_DEFAULT_OFFLOAD_MODEL", "true"), True),
             wan22_default_convert_model_dtype=_bool(os.getenv("WAN22_DEFAULT_CONVERT_MODEL_DTYPE", "true"), True),
             wan22_default_t5_cpu=_bool(os.getenv("WAN22_DEFAULT_T5_CPU", "true"), True),
+            wan22_vae_dtype=os.getenv("WAN22_VAE_DTYPE", ""),
             wan22_timeout_seconds=int(os.getenv("WAN22_TIMEOUT_SECONDS", "7200")),
             ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
             placeholder_outputs=_bool(os.getenv("VIDEOSTUDIO_PLACEHOLDER_OUTPUTS", "false"), False),
