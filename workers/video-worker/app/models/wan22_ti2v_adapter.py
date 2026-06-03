@@ -37,7 +37,7 @@ class Wan22TI2VAdapter:
             frame_count=frame_num,
             output_resolution=size,
             sample_steps=sample_steps,
-            guidance_cfg="unknown_external_generate_py",
+            guidance_cfg="wan_generate_default",
             dtype="fp16_conversion_enabled" if self.settings.wan22_default_convert_model_dtype else "wan_default",
             device="external_wan_generate_py",
             t5_cpu=self.settings.wan22_default_t5_cpu,
@@ -154,6 +154,24 @@ class Wan22TI2VAdapter:
             process_env["WAN_PERF_LOG"] = "1"
         if self.settings.wan22_vae_dtype:
             process_env["WAN_VAE_DTYPE"] = self.settings.wan22_vae_dtype
+        subprocess_start = now()
+        log_perf(
+            "wan_subprocess_starting",
+            task=self._command_value(command, "--task"),
+            output_resolution=self._command_value(command, "--size"),
+            frame_count=self._command_value(command, "--frame_num"),
+            sample_steps=self._command_value(command, "--sample_steps"),
+            guidance_cfg=self._command_value(command, "--sample_guide_scale") or "wan_generate_default",
+            has_input_image="--image" in command,
+            offload_model=self._command_value(command, "--offload_model"),
+            convert_model_dtype="--convert_model_dtype" in command,
+            t5_cpu="--t5_cpu" in command,
+            wan_perf_log=process_env.get("WAN_PERF_LOG", "0"),
+            wan_vae_dtype=process_env.get("WAN_VAE_DTYPE", "wan_default"),
+            cwd=self.settings.wan22_repo_dir,
+            **torch_diagnostics(),
+            **cuda_memory_snapshot("before_wan_subprocess"),
+        )
         process = subprocess.Popen(
             command,
             cwd=self.settings.wan22_repo_dir,
@@ -174,6 +192,13 @@ class Wan22TI2VAdapter:
 
         return_code = process.wait(timeout=self.settings.wan22_timeout_seconds)
         output = "\n".join(lines)
+        log_perf(
+            "wan_subprocess_completed",
+            return_code=return_code,
+            duration_seconds=elapsed_seconds(subprocess_start),
+            output_line_count=len(lines),
+            **cuda_memory_snapshot("after_wan_subprocess"),
+        )
         return subprocess.CompletedProcess(command, return_code, stdout=output, stderr=output)
 
     def _supports_negative_prompt_arg(self) -> bool:
@@ -212,3 +237,11 @@ class Wan22TI2VAdapter:
             return value.encode(output_encoding, errors="replace").decode(output_encoding, errors="replace")
         except Exception:
             return value.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _command_value(command: List[str], option: str) -> str:
+        try:
+            index = command.index(option)
+            return command[index + 1]
+        except (ValueError, IndexError):
+            return ""

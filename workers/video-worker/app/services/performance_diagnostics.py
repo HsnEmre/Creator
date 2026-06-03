@@ -52,8 +52,12 @@ def torch_diagnostics() -> Dict[str, Any]:
                 {
                     "cuda_device_index": device_index,
                     "gpu_name": torch.cuda.get_device_name(device_index),
+                    "cuda_device_capability": ".".join(str(part) for part in torch.cuda.get_device_capability(device_index)),
+                    "cuda_current_device": str(torch.device(f"cuda:{device_index}")),
                     "vram_allocated_mb": round(torch.cuda.memory_allocated(device_index) / 1024 / 1024, 2),
                     "vram_reserved_mb": round(torch.cuda.memory_reserved(device_index) / 1024 / 1024, 2),
+                    "peak_vram_allocated_mb": round(torch.cuda.max_memory_allocated(device_index) / 1024 / 1024, 2),
+                    "peak_vram_reserved_mb": round(torch.cuda.max_memory_reserved(device_index) / 1024 / 1024, 2),
                 }
             )
         except Exception as exc:
@@ -70,6 +74,8 @@ def cuda_memory_snapshot(prefix: str) -> Dict[str, Any]:
     if diagnostics.get("cuda_available"):
         result[f"{prefix}_vram_allocated_mb"] = diagnostics.get("vram_allocated_mb")
         result[f"{prefix}_vram_reserved_mb"] = diagnostics.get("vram_reserved_mb")
+        result[f"{prefix}_peak_vram_allocated_mb"] = diagnostics.get("peak_vram_allocated_mb")
+        result[f"{prefix}_peak_vram_reserved_mb"] = diagnostics.get("peak_vram_reserved_mb")
     return result
 
 
