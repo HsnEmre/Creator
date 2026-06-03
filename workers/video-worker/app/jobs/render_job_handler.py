@@ -167,6 +167,11 @@ class RenderJobHandler:
             return self.animate
         return self.ti2v
 
+    def close(self) -> None:
+        close = getattr(self.ti2v, "close", None)
+        if callable(close):
+            close()
+
     @staticmethod
     def _resolve_job_type(job_type: str) -> str:
         if job_type.isdigit():
@@ -199,6 +204,7 @@ class RenderJobHandler:
             "offload_model": self.settings.wan22_default_offload_model,
             "t5_cpu": self.settings.wan22_default_t5_cpu,
             "wan_torch_optimize": self.settings.wan22_torch_optimize,
+            "wan_persistent_pipeline": self.settings.wan22_persistent_pipeline,
         }
 
     def _maybe_unload_image_pipeline(self, job_id: str, project_id: str, job_type: str) -> None:

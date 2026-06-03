@@ -193,9 +193,16 @@ Optional runtime switches are available for local A/B testing. Leave them unset 
 | Setting | Default | Purpose |
 | ------- | ------- | ------- |
 | `WAN22_TORCH_OPTIMIZE=true` | `false` | Passes `WAN_TORCH_OPTIMIZE=1` to Wan2.2 so `generate.py` enables TF32 matmul, cuDNN TF32, cuDNN benchmark, and high float32 matmul precision when supported. |
+| `WAN22_PERSISTENT_PIPELINE=true` | `false` | Uses an optional long-lived Wan2.2 TI2V subprocess so compatible renders can reuse the loaded T5/VAE/DiT pipeline. |
 | `SDXL_UNLOAD_AFTER_JOB=true` | `false` | Releases the cached SDXL pipeline after character reference or shot start image jobs, then runs garbage collection and CUDA cache cleanup. This can reduce RAM/VRAM pressure before Wan2.2 jobs at the cost of reloading SDXL for the next image job. |
 | `WAN22_VAE_DTYPE=fp16` / `bf16` / `fp32` | unset | Experimental VAE dtype override. Leave unset for Wan2.2 default behavior. |
 | `WAN22_DEFAULT_OFFLOAD_MODEL=false` | `true` | Risky memory/performance test. Keeping more model state on GPU can reduce transfer overhead but may OOM on 16GB VRAM. |
+
+`WAN22_PERSISTENT_PIPELINE=true` starts `warm_ti2v_server.py` inside the local Wan2.2 repository by using `WAN22_PYTHON_EXE` and `WAN22_REPO_DIR`. The first compatible render is still a cold render because the server must load WanTI2V. Later compatible renders can reuse the loaded pipeline and avoid paying the T5/VAE/DiT initialization cost for every shot.
+
+Compatibility is based on checkpoint directory, task, `t5_cpu`, `convert_model_dtype`, VAE dtype, torch optimization mode, and process rank/device settings. If these change, the warm server reloads the pipeline before rendering. If the warm server crashes or times out, the worker fails the current job clearly and terminates the child process. Set `WAN22_PERSISTENT_PIPELINE=false` to return to the existing `generate.py` subprocess-per-job path.
+
+Persistent mode does not change render quality settings and does not remove the VAE decode bottleneck. It only targets repeated model/pipeline loading between compatible shot renders.
 
 Recommended local A/B tests, without changing defaults:
 

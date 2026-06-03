@@ -26,6 +26,7 @@ class Settings:
     wan22_default_t5_cpu: bool
     wan22_vae_dtype: str
     wan22_torch_optimize: bool
+    wan22_persistent_pipeline: bool
     wan22_timeout_seconds: int
     ffmpeg_path: str
     placeholder_outputs: bool
@@ -70,6 +71,7 @@ class Settings:
             wan22_default_t5_cpu=_bool(os.getenv("WAN22_DEFAULT_T5_CPU", "true"), True),
             wan22_vae_dtype=os.getenv("WAN22_VAE_DTYPE", ""),
             wan22_torch_optimize=_bool(os.getenv("WAN22_TORCH_OPTIMIZE", "false"), False),
+            wan22_persistent_pipeline=_bool(os.getenv("WAN22_PERSISTENT_PIPELINE", "false"), False),
             wan22_timeout_seconds=int(os.getenv("WAN22_TIMEOUT_SECONDS", "7200")),
             ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
             placeholder_outputs=_bool(os.getenv("VIDEOSTUDIO_PLACEHOLDER_OUTPUTS", "false"), False),

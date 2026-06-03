@@ -28,10 +28,14 @@ class QueueWorker:
 
                 self.handler.handle(job)
             except KeyboardInterrupt:
+                self.close()
                 raise
             except Exception:
                 logging.exception("Worker loop recovered from an unexpected error.")
                 time.sleep(self.settings.poll_interval_seconds)
+
+    def close(self) -> None:
+        self.handler.close()
 
     def _log_configuration(self) -> None:
         logging.info("VIDEO_API_BASE_URL=%s", self.settings.api_base_url)
@@ -42,6 +46,7 @@ class QueueWorker:
         logging.info("WAN22_DEFAULT_SAMPLE_STEPS=%s", self.settings.wan22_default_sample_steps)
         logging.info("WAN22_VAE_DTYPE=%s", self.settings.wan22_vae_dtype or "(default)")
         logging.info("WAN22_TORCH_OPTIMIZE=%s", self.settings.wan22_torch_optimize)
+        logging.info("WAN22_PERSISTENT_PIPELINE=%s", self.settings.wan22_persistent_pipeline)
         logging.info("VIDEOSTUDIO_PLACEHOLDER_OUTPUTS=%s", self.settings.placeholder_outputs)
         logging.info("IMAGE_MODEL_PROVIDER=%s", self.settings.image_model_provider)
         logging.info("SDXL_MODEL_PATH=%s", self.settings.sdxl_model_path)

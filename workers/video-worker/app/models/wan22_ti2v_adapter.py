@@ -7,6 +7,7 @@ from typing import List
 
 from app.config import Settings
 from app.models.base_video_model import RenderRequest, RenderResult
+from app.models.wan22_persistent_client import Wan22PersistentClient
 from app.services.performance_diagnostics import cuda_memory_snapshot, elapsed_seconds, log_perf, now, torch_diagnostics, timed
 
 
@@ -14,6 +15,7 @@ class Wan22TI2VAdapter:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._supports_negative_prompt = None
+        self._persistent_client = None
 
     def render(self, request: RenderRequest) -> RenderResult:
         render_start = now()
@@ -63,6 +65,12 @@ class Wan22TI2VAdapter:
             )
             return RenderResult(True, str(output_path), stdout=" ".join(command))
 
+        if self.settings.wan22_persistent_pipeline:
+            result = self._persistent().render(request, output_path)
+            if not result.success:
+                return result
+            return self._verified_result(request, output_path, result, render_start)
+
         try:
             with timed(
                 "wan_subprocess_duration",
@@ -86,10 +94,23 @@ class Wan22TI2VAdapter:
         if completed.returncode != 0:
             return RenderResult(False, error_message="Wan2.2 generation failed.", stdout=completed.stdout, stderr=completed.stderr)
 
+        return self._verified_result(request, output_path, RenderResult(True, str(output_path), stdout=completed.stdout, stderr=completed.stderr), render_start)
+
+    def close(self) -> None:
+        if self._persistent_client is not None:
+            self._persistent_client.close()
+            self._persistent_client = None
+
+    def _persistent(self) -> Wan22PersistentClient:
+        if self._persistent_client is None:
+            self._persistent_client = Wan22PersistentClient(self.settings)
+        return self._persistent_client
+
+    def _verified_result(self, request: RenderRequest, output_path: Path, result: RenderResult, render_start) -> RenderResult:
         if not output_path.exists():
-            return RenderResult(False, error_message=f"Wan2.2 exited successfully but output was not found: {output_path}", stdout=completed.stdout, stderr=completed.stderr)
+            return RenderResult(False, error_message=f"Wan2.2 exited successfully but output was not found: {output_path}", stdout=result.stdout, stderr=result.stderr)
         if output_path.stat().st_size <= 0:
-            return RenderResult(False, error_message=f"Wan2.2 wrote an empty output file: {output_path}", stdout=completed.stdout, stderr=completed.stderr)
+            return RenderResult(False, error_message=f"Wan2.2 wrote an empty output file: {output_path}", stdout=result.stdout, stderr=result.stderr)
 
         log_perf(
             "wan_render_completed",
@@ -98,9 +119,10 @@ class Wan22TI2VAdapter:
             output_path=str(output_path),
             output_size_bytes=output_path.stat().st_size,
             total_duration_seconds=elapsed_seconds(render_start),
+            persistent_pipeline=self.settings.wan22_persistent_pipeline,
             **cuda_memory_snapshot("after_render"),
         )
-        return RenderResult(True, str(output_path), stdout=completed.stdout, stderr=completed.stderr)
+        return RenderResult(True, str(output_path), stdout=result.stdout, stderr=result.stderr)
 
     def _build_command(self, request: RenderRequest, output_path: Path) -> List[str]:
         python_exe = self.settings.wan22_python_exe or "python"
