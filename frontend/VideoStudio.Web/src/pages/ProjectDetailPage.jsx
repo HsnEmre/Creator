@@ -42,6 +42,22 @@ function isCompletedStatus(status) {
   return status === 2 || String(status).toLowerCase() === "completed";
 }
 
+function flattenStoryboardShots(plan) {
+  return (plan?.scenes || []).flatMap((scene) =>
+    (scene.shots || []).map((shot) => ({
+      ...shot,
+      sceneId: shot.sceneId || scene.id,
+      sceneIndex: scene.index ?? scene.sceneIndex,
+      shotIndex: shot.index ?? shot.shotIndex,
+      index: shot.index ?? shot.shotIndex
+    }))
+  );
+}
+
+function hasShotStartImage(shot) {
+  return Boolean(shot?.startImagePath || shot?.startImageUrl);
+}
+
 export default function ProjectDetailPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
@@ -120,6 +136,7 @@ export default function ProjectDetailPage() {
     () => Boolean(visualPlan?.scenes?.some((scene) => scene.shots?.some((shot) => Boolean(shot.startImageUrl || shot.startImagePath)))),
     [visualPlan]
   );
+  const storyboardShots = useMemo(() => flattenStoryboardShots(visualPlan), [visualPlan]);
   const selectedScene = useMemo(() => scenes.find((scene) => scene.id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
   const selectedSceneShots = useMemo(
     () => shots.filter((shot) => selectedScene && shot.sceneId === selectedScene.id).sort((a, b) => (a.shotIndex || 0) - (b.shotIndex || 0)),
@@ -288,15 +305,28 @@ export default function ProjectDetailPage() {
 
   function renderWithPayload(payload, label) {
     return withAction("render", async () => {
-      const result = await renderProject(projectId, {
+      const requestPayload = {
+        // 0 = FastPreview, 1 = Preview, 2 = Final
         preset: 0,
+        maxShots: payload?.shotIds?.length || payload?.maxShots || 1,
         force: true,
         useCharacterReferenceInPrompt,
         useShotStartImage,
         ...payload
-      });
+      };
+      if (import.meta.env.DEV) {
+        console.info("[VideoStudio] render request", {
+          label,
+          preset: requestPayload.preset,
+          maxShots: requestPayload.maxShots,
+          shotIds: requestPayload.shotIds || [],
+          useShotStartImage: requestPayload.useShotStartImage,
+          useCharacterReferenceInPrompt: requestPayload.useCharacterReferenceInPrompt
+        });
+      }
+      const result = await renderProject(projectId, requestPayload);
       await loadJobs();
-      const warning = useShotStartImage && !hasAnyShotStartImage ? " No shot start image found. Render will use Text-to-Video." : "";
+      const warning = requestPayload.useShotStartImage && !hasAnyShotStartImage ? " No shot start image found. Render will use Text-to-Video." : "";
       setMessage(`${label}: queued ${result?.queuedJobs ?? 0} render job(s).${warning}`);
     });
   }
@@ -322,7 +352,8 @@ export default function ProjectDetailPage() {
       setError("Select a shot before animating.");
       return undefined;
     }
-    const selectedHasKeyframe = Boolean(shot.startImageUrl || shot.startImagePath);
+    const selectedHasKeyframe = hasShotStartImage(shot);
+    const effectiveUseShotStartImage = selectedHasKeyframe || useShotStartImage;
     if (selectedHasKeyframe && !useShotStartImage) {
       setUseShotStartImage(true);
     }
@@ -330,21 +361,30 @@ export default function ProjectDetailPage() {
     return renderWithPayload(
       {
         shotIds: [shot.id],
-        useShotStartImage: selectedHasKeyframe || useShotStartImage
+        maxShots: 1,
+        useShotStartImage: effectiveUseShotStartImage
       },
       "Selected shot"
     );
   }
 
   function onRenderStoryboardAll() {
+    const shotIds = storyboardShots.map((shot) => shot.id).filter(Boolean);
+    if (!shotIds.length) {
+      setError("No storyboard shots are available to animate.");
+      return undefined;
+    }
+    const shotsWithKeyframes = storyboardShots.filter(hasShotStartImage).length;
+    const effectiveUseShotStartImage = shotsWithKeyframes > 0 || useShotStartImage;
     if (hasAnyShotStartImage && !useShotStartImage) {
       setUseShotStartImage(true);
     }
     return renderWithPayload(
       {
-        maxShots: 9999,
+        shotIds,
+        maxShots: shotIds.length,
         force: false,
-        useShotStartImage: hasAnyShotStartImage || useShotStartImage
+        useShotStartImage: effectiveUseShotStartImage
       },
       "All shots"
     );
