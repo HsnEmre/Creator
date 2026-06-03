@@ -204,6 +204,33 @@ Compatibility is based on checkpoint directory, task, `t5_cpu`, `convert_model_d
 
 Persistent mode does not change render quality settings and does not remove the VAE decode bottleneck. It only targets repeated model/pipeline loading between compatible shot renders.
 
+### Current Best Observed Local Wan Runtime
+
+The current best local Wan2.2 runtime configuration from testing is:
+
+```env
+WAN22_DEFAULT_OFFLOAD_MODEL=true
+WAN22_DEFAULT_CONVERT_MODEL_DTYPE=true
+WAN22_DEFAULT_T5_CPU=true
+WAN22_TORCH_OPTIMIZE=false
+WAN22_PERSISTENT_PIPELINE=true
+WAN22_VAE_DTYPE=fp16
+SDXL_UNLOAD_AFTER_JOB=true
+```
+
+Observed results for warm subsequent `FastPreview` image-to-video renders at 25 frames and 5 sample steps:
+
+* First render is slower because the warm subprocess loads WanTI2V once.
+* Later compatible renders reuse the persistent pipeline.
+* Warm render duration is approximately 180-203 seconds.
+* Sampling is approximately 12 seconds.
+* VAE decode is approximately 160-180 seconds.
+* `WAN22_VAE_DTYPE=fp16` works locally and reduces VAE decode time compared with default fp32 behavior.
+* `WAN22_TORCH_OPTIMIZE=false` remains the best observed value for this local setup.
+* The remaining dominant bottleneck is VAE decode, not model loading or sampling.
+
+Keep these as local test settings, not global defaults. If instability appears, return to the safe defaults by setting `WAN22_PERSISTENT_PIPELINE=false`, clearing `WAN22_VAE_DTYPE`, and leaving `SDXL_UNLOAD_AFTER_JOB=false`.
+
 Recommended local A/B tests, without changing defaults:
 
 | Test | Worker environment | Record |
