@@ -31,11 +31,10 @@ import {
 import ContentStep from "../components/ContentStep";
 import CastStep from "../components/CastStep";
 import StoryboardStep from "../components/StoryboardStep";
+import EditStep from "../components/EditStep";
 import RenderJobsPanel from "../components/RenderJobsPanel";
-import DialogueLinesPanel from "../components/DialogueLinesPanel";
 import VideoPreviewPanel from "../components/VideoPreviewPanel";
 import CreatorShell from "../components/CreatorShell";
-import AssemblyPanel from "../components/AssemblyPanel";
 
 const VISUAL_JOB_TYPES = new Set(["GenerateCharacterReferenceImage", "GenerateShotStartImage"]);
 
@@ -544,11 +543,6 @@ export default function ProjectDetailPage() {
   const completedAudioCount = dialogueLines.filter((line) => line.audioUrl || line.audioPath).length;
   const hasAssembly = completedJobs.some((job) => job.jobTypeName === "AssembleVideo") || Boolean(finalVideo?.assembledMediaUrl);
   const hasFinal = completedJobs.some((job) => job.jobTypeName === "MuxAudio") || Boolean(finalVideo?.mediaUrl);
-  const keyframeStatus = shotStartImageCount ? "Done" : shotCount ? "Ready" : "Waiting";
-  const renderStatus = hasRunningRenderVideo ? "Running" : completedRenderCount ? "Done" : shotCount ? "Ready" : "Waiting";
-  const assemblyStatus = hasAssembly ? "Done" : completedRenderCount ? "Ready" : "Waiting";
-  const audioStatus = hasRunningAudio ? "Running" : completedAudioCount ? "Done" : dialogueLines.length ? "Ready" : "Waiting";
-  const finalStatus = hasRunningFinalize ? "Running" : hasFinal ? "Done" : hasAssembly || completedRenderCount ? "Ready" : "Waiting";
   const activeJobCount = jobs.filter((job) => {
     const status = String(job.status).toLowerCase();
     return job.status === 0 || job.status === 1 || status === "pending" || status === "rendering";
@@ -601,7 +595,7 @@ export default function ProjectDetailPage() {
         onRefresh={refreshAll}
         message={message}
         error={error}
-        railCollapsed={selectedStep === "content"}
+        railCollapsed={selectedStep === "content" || selectedStep === "edit"}
         rightRail={
           <>
             <VideoPreviewPanel
@@ -615,18 +609,6 @@ export default function ProjectDetailPage() {
               <summary>Job Monitor</summary>
               <RenderJobsPanel jobs={jobs} onRefresh={loadJobs} />
             </details>
-            <section className="card">
-              <h2>Development Recovery</h2>
-              <p className="muted">Use these only for local queue cleanup while iterating.</p>
-              <div className="actions">
-                <button disabled={Boolean(busyAction)} onClick={onResetStale}>
-                  {busyAction === "reset-stale" ? "Resetting..." : "Reset Stale Jobs (30m)"}
-                </button>
-                <button disabled={Boolean(busyAction)} onClick={onCleanupJobs}>
-                  {busyAction === "cleanup" ? "Cleaning..." : "Cleanup Jobs"}
-                </button>
-              </div>
-            </section>
           </>
         }
       >
@@ -686,33 +668,32 @@ export default function ProjectDetailPage() {
         ) : null}
 
         {selectedStep === "edit" ? (
-          <div className="creator-step-panel">
-            <section className="creator-step-intro">
-              <span className="badge">{finalStatus}</span>
-              <h2>Edit</h2>
-              <p className="muted">Assemble rendered shots, generate dialogue audio, finalize, and preview the movie.</p>
-            </section>
-            <AssemblyPanel isBusy={Boolean(busyAction)} onAssemble={onAssemble} onFinalize={onFinalize} finalVideo={finalVideo} showFinalize={false} />
-            <section className="card compact-card">
-              <h2>Audio and Final Movie</h2>
-              <p className="muted">TTS and FFmpeg jobs run in the Python worker. The API only queues and tracks the work.</p>
-              <div className="actions">
-                <button disabled={Boolean(busyAction) || hasRunningAudio} onClick={onGenerateAudio}>
-                  {busyAction === "audio" ? "Queueing..." : "Generate Audio"}
-                </button>
-                <button disabled={Boolean(busyAction) || hasRunningAudio} onClick={onRegenerateAudio}>
-                  {busyAction === "audio-force" ? "Queueing..." : "Regenerate Audio"}
-                </button>
-                <button disabled={Boolean(busyAction) || hasRunningFinalize} onClick={onFinalize}>
-                  {busyAction === "finalize" ? "Queueing..." : "Finalize Video"}
-                </button>
-                <button disabled={Boolean(busyAction) || hasRunningFinalize} onClick={onRefinalize}>
-                  {busyAction === "refinalize" ? "Queueing..." : "Re-finalize Video"}
-                </button>
-              </div>
-            </section>
-            <DialogueLinesPanel lines={dialogueLines} onRefresh={loadDialogueLines} />
-          </div>
+          <EditStep
+            finalVideo={finalVideo}
+            latestCompletedRender={latestCompletedRender}
+            jobs={jobs}
+            dialogueLines={dialogueLines}
+            shotCount={shotCount}
+            completedRenderCount={completedRenderCount}
+            completedAudioCount={completedAudioCount}
+            hasAssembly={hasAssembly}
+            hasFinal={hasFinal}
+            hasRunningRenderVideo={hasRunningRenderVideo}
+            hasRunningAudio={hasRunningAudio}
+            hasRunningFinalize={hasRunningFinalize}
+            busyAction={busyAction}
+            onAssemble={onAssemble}
+            onGenerateAudio={onGenerateAudio}
+            onRegenerateAudio={onRegenerateAudio}
+            onFinalize={onFinalize}
+            onRefinalize={onRefinalize}
+            onRefresh={refreshAll}
+            onRefreshJobs={loadJobs}
+            onRefreshDialogueLines={loadDialogueLines}
+            onResetStale={onResetStale}
+            onCleanupJobs={onCleanupJobs}
+            onGoStoryboard={() => setSelectedStep("storyboard")}
+          />
         ) : null}
       </CreatorShell>
     </div>

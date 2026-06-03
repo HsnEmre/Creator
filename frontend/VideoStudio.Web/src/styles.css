@@ -964,6 +964,147 @@ body {
   border-style: dashed;
 }
 
+.edit-step {
+  gap: 16px;
+}
+
+.edit-hero,
+.edit-preview-card,
+.edit-summary-card,
+.edit-check-card,
+.edit-voiceover-section,
+.edit-monitor-details,
+.edit-developer-tools {
+  background: linear-gradient(160deg, rgba(21, 31, 45, 0.86), rgba(13, 20, 30, 0.76));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 8px 22px rgba(2, 6, 12, 0.35);
+}
+
+.edit-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.edit-hero h2 {
+  margin: 10px 0 6px;
+  font-size: 32px;
+}
+
+.edit-hero p {
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.edit-hero-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid rgba(92, 197, 255, 0.5);
+  border-radius: 6px;
+  color: var(--text);
+  background: linear-gradient(180deg, #28486b, #1b2a3d);
+  text-decoration: none;
+}
+
+.button-link:hover {
+  border-color: rgba(92, 197, 255, 0.72);
+}
+
+.edit-preview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 12px;
+  align-items: start;
+}
+
+.edit-preview-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.edit-preview-card > .card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.edit-preview-card .preview-player {
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  background: #02040a;
+}
+
+.edit-preview-empty {
+  padding: 0 16px 16px;
+}
+
+.edit-summary-card {
+  display: grid;
+  gap: 8px;
+}
+
+.edit-summary-card b {
+  font-size: 22px;
+}
+
+.edit-checklist {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.edit-check-card {
+  display: grid;
+  gap: 10px;
+  min-height: 190px;
+}
+
+.edit-check-card button {
+  align-self: end;
+}
+
+.edit-voiceover-section {
+  display: grid;
+  gap: 12px;
+}
+
+.edit-voiceover-section > .card {
+  box-shadow: none;
+  background: rgba(10, 15, 24, 0.52);
+}
+
+.edit-monitor-details,
+.edit-developer-tools {
+  padding: 12px;
+  background: rgba(10, 15, 24, 0.58);
+}
+
+.edit-monitor-details summary,
+.edit-developer-tools summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.edit-monitor-details > .card {
+  margin-top: 10px;
+  box-shadow: none;
+}
+
 .storyboard-workspace {
   display: grid;
   grid-template-columns: minmax(220px, 0.4fr) minmax(0, 1fr);
@@ -1381,7 +1522,9 @@ audio {
   .cast-hero-stats,
   .cast-explainer,
   .storyboard-editor-layout,
-  .storyboard-shot-notes {
+  .storyboard-shot-notes,
+  .edit-preview-grid,
+  .edit-checklist {
     grid-template-columns: 1fr;
   }
 
@@ -1403,6 +1546,11 @@ audio {
   }
 
   .creator-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .edit-hero {
     align-items: flex-start;
     flex-direction: column;
   }
