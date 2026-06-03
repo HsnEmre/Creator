@@ -1500,6 +1500,29 @@ app.MapPost("/api/projects/{id:guid}/jobs/cleanup", async (Guid id, VideoStudioD
     });
 });
 
+app.MapPost("/api/projects/{id:guid}/jobs/cancel-active", async (Guid id, VideoStudioDbContext db) =>
+{
+    var exists = await db.Projects.AnyAsync(p => p.Id == id);
+    if (!exists)
+    {
+        return Results.NotFound();
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    var canceled = await db.RenderJobs
+        .Where(j => j.ProjectId == id && (j.Status == RenderJobStatus.Pending || j.Status == RenderJobStatus.Rendering))
+        .ExecuteUpdateAsync(updates => updates
+            .SetProperty(j => j.Status, RenderJobStatus.Canceled)
+            .SetProperty(j => j.ErrorMessage, "Cancelled by development cleanup.")
+            .SetProperty(j => j.FinishedAt, now));
+
+    return Results.Ok(new
+    {
+        canceledJobs = canceled,
+        status = RenderJobStatus.Canceled.ToString()
+    });
+});
+
 app.Run();
 
 static ProjectSummaryDto ToSummary(Project project) => new(project.Id, project.Name, project.StoryText, project.TargetDurationSeconds, project.Status, project.CreatedAt, project.UpdatedAt);

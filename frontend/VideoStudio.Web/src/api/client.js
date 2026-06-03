@@ -215,3 +215,10 @@ export function cleanupProjectJobs(projectId) {
     body: JSON.stringify({})
   });
 }
+
+export function cancelProjectActiveJobs(projectId) {
+  return request(`/api/projects/${projectId}/jobs/cancel-active`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}

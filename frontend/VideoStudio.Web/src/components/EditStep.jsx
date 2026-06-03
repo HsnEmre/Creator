@@ -56,6 +56,7 @@ export default function EditStep({
   onRefreshDialogueLines,
   onResetStale,
   onCleanupJobs,
+  onCancelActiveJobs,
   onGoStoryboard
 }) {
   const isBusy = Boolean(busyAction);
@@ -204,6 +205,9 @@ export default function EditStep({
           </button>
           <button type="button" disabled={isBusy} onClick={onCleanupJobs}>
             {busyAction === "cleanup" ? "Cleaning..." : "Cleanup Jobs"}
+          </button>
+          <button type="button" disabled={isBusy} onClick={onCancelActiveJobs}>
+            {busyAction === "cancel-active-jobs" ? "Cancelling..." : "Cancel this project's queued/running jobs"}
           </button>
         </div>
       </details>

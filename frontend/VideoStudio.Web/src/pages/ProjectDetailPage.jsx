@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   analyzeProject,
   assembleProject,
+  cancelProjectActiveJobs,
   cleanupProjectJobs,
   finalizeProject,
   generateCharacterReferences,
@@ -570,6 +571,14 @@ export default function ProjectDetailPage() {
     });
   }
 
+  function onCancelActiveJobs() {
+    return withAction("cancel-active-jobs", async () => {
+      const result = await cancelProjectActiveJobs(projectId);
+      await loadJobs();
+      setMessage(`Cancelled ${result?.canceledJobs ?? 0} queued/running job(s) for this project.`);
+    });
+  }
+
   const completedJobs = jobs.filter((job) => isCompletedStatus(job.status));
   const characterReferenceCount = visualPlan?.characters?.filter((character) => character.referenceImageUrl || character.referenceImagePath).length ?? 0;
   const shotStartImageCount = visualPlan?.scenes?.reduce(
@@ -732,6 +741,7 @@ export default function ProjectDetailPage() {
             onRefreshDialogueLines={loadDialogueLines}
             onResetStale={onResetStale}
             onCleanupJobs={onCleanupJobs}
+            onCancelActiveJobs={onCancelActiveJobs}
             onGoStoryboard={() => setSelectedStep("storyboard")}
           />
         ) : null}
