@@ -616,7 +616,7 @@ export default function ProjectDetailPage() {
     (count, scene) => count + (scene.shots?.reduce((shotTotal, shot) => shotTotal + Number(shot.durationSeconds || shot.targetDurationSeconds || 0), 0) ?? 0),
     0
   ) ?? 0;
-  const targetDurationSeconds = visualPlan?.targetDurationSeconds || project.targetDurationSeconds || 60;
+  const targetDurationSeconds = visualPlan?.targetDurationSeconds || project?.targetDurationSeconds || 60;
   const durationPlanSummary = {
     targetDurationSeconds,
     totalPlannedDurationSeconds: visualPlan?.totalPlannedDurationSeconds ?? computedPlannedDurationSeconds,
@@ -632,8 +632,8 @@ export default function ProjectDetailPage() {
     (job) => job.jobTypeName === "RenderVideo" && isCompletedStatus(job.status) && String(job.generationModeName).toLowerCase() === "imagetovideo"
   ).length;
   const continuitySummary = {
-    hasContinuityBible: Boolean(visualPlan?.hasContinuityBible),
-    characterVisualLocksApplied: Boolean(visualPlan?.characterVisualLocksApplied),
+    hasContinuityBible: visualPlan?.hasContinuityBible ?? false,
+    characterVisualLocksApplied: visualPlan?.characterVisualLocksApplied ?? false,
     distinctNegativePromptCount: visualPlan?.distinctNegativePromptCount ?? 0,
     duplicateNegativePromptGroups: visualPlan?.duplicateNegativePromptGroups ?? 0,
     continuityWarning: visualPlan?.continuityWarning || "",
