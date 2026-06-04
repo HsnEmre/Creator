@@ -1008,9 +1008,15 @@ app.MapGet("/api/projects/{id:guid}/render-jobs", async (Guid id, VideoStudioDbC
     }
 
     var jobEntities = await db.RenderJobs
-        .Where(j => j.ProjectId == id)
         .Include(j => j.Scene)
         .Include(j => j.Shot)
+        .Include(j => j.Character)
+        .Include(j => j.DialogueLine)
+        .Where(j => j.ProjectId == id
+            || (j.Scene != null && j.Scene.ProjectId == id)
+            || (j.Shot != null && j.Shot.ProjectId == id)
+            || (j.Character != null && j.Character.ProjectId == id)
+            || (j.DialogueLine != null && j.DialogueLine.ProjectId == id))
         .OrderByDescending(j => j.CreatedAt)
         .ToListAsync();
     var latestSuccessfulRenderIds = LatestCompletedRendersByShot(jobEntities)
@@ -1020,6 +1026,9 @@ app.MapGet("/api/projects/{id:guid}/render-jobs", async (Guid id, VideoStudioDbC
     var jobs = jobEntities
         .Select(j => new ProjectRenderJobDetailsDto(
             j.Id,
+            id,
+            j.SceneId ?? j.Scene?.Id,
+            j.ShotId ?? j.Shot?.Id,
             j.Scene != null ? j.Scene.Index : null,
             j.Shot != null ? j.Shot.Index : null,
             j.JobType,
@@ -1027,12 +1036,13 @@ app.MapGet("/api/projects/{id:guid}/render-jobs", async (Guid id, VideoStudioDbC
             j.GenerationMode,
             j.GenerationMode.ToString(),
             j.Status,
+            j.Status.ToString(),
             j.Progress,
             j.Preset,
             j.InputImagePath,
-            TryBuildMediaUrl(j.InputImagePath, "assets", j.ProjectId),
+            TryBuildMediaUrl(j.InputImagePath, "assets", id),
             j.OutputPath,
-            TryBuildMediaUrl(j.OutputPath, j.JobType == RenderJobType.GenerateAudio ? "audio" : (j.JobType == RenderJobType.MuxAudio || j.JobType == RenderJobType.AssembleVideo ? "finals" : (j.JobType == RenderJobType.GenerateCharacterReferenceImage || j.JobType == RenderJobType.GenerateShotStartImage ? "assets" : "renders")), j.ProjectId),
+            TryBuildMediaUrl(j.OutputPath, j.JobType == RenderJobType.GenerateAudio ? "audio" : (j.JobType == RenderJobType.MuxAudio || j.JobType == RenderJobType.AssembleVideo ? "finals" : (j.JobType == RenderJobType.GenerateCharacterReferenceImage || j.JobType == RenderJobType.GenerateShotStartImage ? "assets" : "renders")), id),
             j.ErrorMessage,
             j.CreatedAt,
             j.StartedAt,
