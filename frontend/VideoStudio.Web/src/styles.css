@@ -818,6 +818,37 @@ body {
   font-size: 18px;
 }
 
+.storyboard-continuity-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  gap: 10px;
+  background: rgba(8, 13, 20, 0.54);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.storyboard-continuity-summary.invalid {
+  border-color: rgba(255, 199, 95, 0.45);
+  background: rgba(255, 199, 95, 0.08);
+}
+
+.storyboard-continuity-summary > div {
+  display: grid;
+  gap: 4px;
+}
+
+.storyboard-continuity-summary b {
+  font-size: 16px;
+}
+
+.storyboard-warning-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .storyboard-editor-layout {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(280px, 360px);

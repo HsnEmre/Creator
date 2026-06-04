@@ -628,6 +628,22 @@ export default function ProjectDetailPage() {
     isDurationPlanValid: visualPlan?.isDurationPlanValid ?? true,
     durationPlanWarning: visualPlan?.durationPlanWarning || ""
   };
+  const completedImageToVideoCount = jobs.filter(
+    (job) => job.jobTypeName === "RenderVideo" && isCompletedStatus(job.status) && String(job.generationModeName).toLowerCase() === "imagetovideo"
+  ).length;
+  const continuitySummary = {
+    hasContinuityBible: Boolean(visualPlan?.hasContinuityBible),
+    characterVisualLocksApplied: Boolean(visualPlan?.characterVisualLocksApplied),
+    distinctNegativePromptCount: visualPlan?.distinctNegativePromptCount ?? 0,
+    duplicateNegativePromptGroups: visualPlan?.duplicateNegativePromptGroups ?? 0,
+    continuityWarning: visualPlan?.continuityWarning || "",
+    characterReferenceCount,
+    characterCount,
+    shotStartImageCount,
+    shotCount,
+    startImagesUsedByVideoCount: completedImageToVideoCount,
+    textOnlyFallbackCount: Math.max(0, completedJobs.filter((job) => job.jobTypeName === "RenderVideo").length - completedImageToVideoCount)
+  };
   const completedRenderCount = completedJobs.filter((job) => job.jobTypeName === "RenderVideo").length;
   const completedAudioCount = dialogueLines.filter((line) => line.audioUrl || line.audioPath).length;
   const hasAssembly = completedJobs.some((job) => job.jobTypeName === "AssembleVideo") || Boolean(finalVideo?.assembledMediaUrl);
@@ -743,6 +759,7 @@ export default function ProjectDetailPage() {
             useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
             hasAnyShotStartImage={hasAnyShotStartImage}
             durationPlanSummary={durationPlanSummary}
+            continuitySummary={continuitySummary}
             isBusy={Boolean(busyAction)}
             hasRunningRenderVideo={hasRunningRenderVideo}
             onSelectShot={onSelectStoryboardShot}
@@ -755,6 +772,7 @@ export default function ProjectDetailPage() {
             onAnimateSelected={onRenderStoryboardSelected}
             onAnimateAll={onRenderStoryboardAll}
             onRegenerateAll={onRegenerateStoryboardAll}
+            onRegeneratePlan={onAnalyze}
           />
         ) : null}
 

@@ -311,7 +311,7 @@ app.MapPost("/api/projects/{id:guid}/preproduction/prepare", async (Guid id, Vid
     {
         foreach (var shot in scene.Shots)
         {
-            shot.StartImagePrompt = RequiredText(shot.StartImagePrompt, BuildShotStartImagePrompt(project, scene, shot));
+            shot.StartImagePrompt = RequiredText(shot.StartImagePrompt, BuildShotStartImagePrompt(project, scene, shot, project.Characters));
             shot.StartImageNegativePrompt = RequiredText(shot.StartImageNegativePrompt, ProductionPlanNormalizer.DefaultImageNegativePrompt());
             shot.StartImageStatus = string.IsNullOrWhiteSpace(shot.StartImagePath) ? "PromptReady" : "Ready";
         }
@@ -447,6 +447,12 @@ app.MapGet("/api/projects/{id:guid}/shots", async (Guid id, VideoStudioDbContext
                 latestRenderJobId = latestRender?.Id,
                 latestRenderStatus = latestRender?.Status,
                 latestRenderStatusName = latestRender?.Status.ToString(),
+                latestRenderGenerationMode = latestRender?.GenerationMode,
+                latestRenderGenerationModeName = latestRender?.GenerationMode.ToString(),
+                latestRenderInputImagePath = latestRender?.InputImagePath,
+                latestRenderInputImageUrl = TryBuildMediaUrl(latestRender?.InputImagePath, "assets", id),
+                startImageUsedForLatestRender = latestRender?.GenerationMode == VideoGenerationMode.ImageToVideo && !string.IsNullOrWhiteSpace(latestRender.InputImagePath),
+                textOnlyRenderFallback = latestRender is null || latestRender.GenerationMode == VideoGenerationMode.TextToVideo,
                 latestRenderDurationSeconds = RenderDurationSeconds(latestRender),
                 latestRenderOutputPath = latestRender?.OutputPath,
                 latestRenderOutputUrl = TryBuildMediaUrl(latestRender?.OutputPath, "renders", id),
@@ -563,7 +569,7 @@ app.MapGet("/api/diagnostics/ollama", async (OllamaStoryPlanner planner, Cancell
     return Results.Ok(await planner.CheckHealthAsync(cancellationToken));
 });
 
-app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? request, VideoStudioDbContext db, PromptCompiler promptCompiler) =>
+app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? request, VideoStudioDbContext db, PromptCompiler promptCompiler, ILogger<Program> logger) =>
 {
     var project = await db.Projects
         .Include(p => p.Characters)
@@ -620,10 +626,50 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
 
         var compiled = promptCompiler.Compile(project, shot.Scene!, shot, project.Characters, preset, useCharacterReferenceInPrompt);
         var inputImagePath = useShotStartImage ? shot.StartImagePath : null;
+        if (useShotStartImage && string.IsNullOrWhiteSpace(inputImagePath))
+        {
+            logger.LogWarning(
+                "shot_start_image_missing projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId}",
+                project.Id,
+                shot.Scene!.Index,
+                shot.Index,
+                shot.Id);
+        }
+        if (!string.IsNullOrWhiteSpace(inputImagePath))
+        {
+            logger.LogInformation(
+                "shot_start_image_selected projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} imagePath={ImagePath}",
+                project.Id,
+                shot.Scene!.Index,
+                shot.Index,
+                shot.Id,
+                inputImagePath);
+        }
         var generationMode = string.IsNullOrWhiteSpace(inputImagePath)
             ? VideoGenerationMode.TextToVideo
             : VideoGenerationMode.ImageToVideo;
-        jobs.Add(new RenderJob
+        if (generationMode == VideoGenerationMode.ImageToVideo)
+        {
+            logger.LogInformation(
+                "shot_start_image_used_for_video projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} imagePath={ImagePath}",
+                project.Id,
+                shot.Scene!.Index,
+                shot.Index,
+                shot.Id,
+                inputImagePath);
+        }
+        else
+        {
+            logger.LogInformation(
+                "shot_start_image_not_supported_for_video projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} character_reference_image_not_used_by_video_backend={CharacterReferenceImageNotUsedByVideoBackend} reason={Reason}",
+                project.Id,
+                shot.Scene!.Index,
+                shot.Index,
+                shot.Id,
+                useCharacterReferenceInPrompt && project.Characters.Any(c => !string.IsNullOrWhiteSpace(c.ReferenceImagePath)),
+                "current render path only passes shot start images as Wan2.2 --image; character references are prompt identity guidance");
+        }
+        var renderJob = new RenderJob
         {
             ProjectId = project.Id,
             SceneId = shot.SceneId,
@@ -642,7 +688,19 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             InputVideoPath = shot.InputVideoPath,
             InputAudioPath = shot.InputAudioPath,
             Status = RenderJobStatus.Pending
-        });
+        };
+        if (renderJob.GenerationMode == VideoGenerationMode.ImageToVideo)
+        {
+            logger.LogInformation(
+                "shot_start_image_used_for_video projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} imagePath={ImagePath}",
+                project.Id,
+                shot.Scene!.Index,
+                shot.Index,
+                shot.Id,
+                renderJob.Id,
+                inputImagePath);
+        }
+        jobs.Add(renderJob);
         queuedShotDtos.Add(new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index));
     }
 
@@ -791,7 +849,7 @@ app.MapPost("/api/projects/{id:guid}/visuals/generate-shot-start-images", async 
     {
         foreach (var shot in scene.Shots.OrderBy(s => s.Index).Where(s => requestedShotIds is null || requestedShotIds.Contains(s.Id)))
         {
-            shot.StartImagePrompt = RequiredText(shot.StartImagePrompt, BuildShotStartImagePrompt(project, scene, shot));
+            shot.StartImagePrompt = RequiredText(shot.StartImagePrompt, BuildShotStartImagePrompt(project, scene, shot, project.Characters));
             shot.StartImageNegativePrompt = RequiredText(shot.StartImageNegativePrompt, ProductionPlanNormalizer.DefaultImageNegativePrompt());
             var hasImage = !string.IsNullOrWhiteSpace(shot.StartImagePath);
             var hasPending = project.RenderJobs.Any(j => j.ShotId == shot.Id && j.JobType == RenderJobType.GenerateShotStartImage && (j.Status == RenderJobStatus.Pending || j.Status == RenderJobStatus.Rendering));
@@ -841,7 +899,8 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
 
     var force = request?.Force ?? false;
     var outputPath = Path.GetFullPath(Path.Combine("../../storage/finals", id.ToString(), "assembled.mp4"));
-    if (!force && File.Exists(outputPath))
+    var assemblyRules = GetAssemblyRules(project.TargetDurationSeconds);
+    if (!force && !assemblyRules.IsLongForm && File.Exists(outputPath))
     {
         return Results.Ok(new { createdJobId = (Guid?)null, localPath = outputPath, mediaUrl = TryBuildMediaUrl(outputPath, "finals", id), alreadyExists = true });
     }
@@ -876,6 +935,8 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
     var assemblySegments = selectedShotRenders
         .Select(item => new
         {
+            projectId = id,
+            projectTargetDurationSeconds = project.TargetDurationSeconds,
             videoPath = item.Render.OutputPath,
             shotId = item.Shot.Id,
             sceneId = item.Shot.SceneId,
@@ -892,6 +953,43 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
     {
         return Results.BadRequest("No completed shot videos are available to assemble.");
     }
+
+    logger.LogInformation(
+        "ffmpeg_assembly_plan_validation_started projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} totalTargetDurationSeconds={TotalTargetDurationSeconds} videoCount={VideoCount} shotCount={ShotCount} minShots={MinimumShots} minimumTargetDurationSeconds={MinimumTargetDurationSeconds}",
+        id,
+        project.TargetDurationSeconds,
+        totalTargetDurationSeconds,
+        assemblySegments.Count,
+        orderedShots.Count,
+        assemblyRules.MinimumShots,
+        assemblyRules.MinimumTargetDurationSeconds);
+
+    var hasMissingDurations = assemblySegments.Any(segment => segment.targetDurationSeconds <= 0);
+    if (assemblyRules.IsLongForm &&
+        (orderedShots.Count < assemblyRules.MinimumShots ||
+         totalTargetDurationSeconds < assemblyRules.MinimumTargetDurationSeconds ||
+         hasMissingDurations ||
+         totalTargetDurationSeconds < 30))
+    {
+        logger.LogWarning(
+            "ffmpeg_assembly_plan_validation_failed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} totalTargetDurationSeconds={TotalTargetDurationSeconds} videoCount={VideoCount} shotCount={ShotCount} minShots={MinimumShots} minimumTargetDurationSeconds={MinimumTargetDurationSeconds} hasMissingDurations={HasMissingDurations}",
+            id,
+            project.TargetDurationSeconds,
+            totalTargetDurationSeconds,
+            assemblySegments.Count,
+            orderedShots.Count,
+            assemblyRules.MinimumShots,
+            assemblyRules.MinimumTargetDurationSeconds,
+            hasMissingDurations);
+        return Results.BadRequest($"Storyboard is too short for assembly. Regenerate the plan before assembling: {orderedShots.Count} shots, {totalTargetDurationSeconds}s planned for {project.TargetDurationSeconds}s target.");
+    }
+
+    logger.LogInformation(
+        "ffmpeg_assembly_plan_validation_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} totalTargetDurationSeconds={TotalTargetDurationSeconds} videoCount={VideoCount}",
+        id,
+        project.TargetDurationSeconds,
+        totalTargetDurationSeconds,
+        assemblySegments.Count);
 
     logger.LogInformation(
         "Assembling project {ProjectId} with latest render jobs {RenderJobIds} for shots {ShotIds}. Missing shots: {MissingShotCount}",
@@ -1742,11 +1840,16 @@ static string BuildCharacterReferencePrompt(Project project, Character character
     return $"English character reference image for a story-to-video pipeline. Neutral cinematic background, clear face, natural full-body or waist-up framing, stable identity and clothing. Character: {character.Name}. Role: {character.Role}. Visual lock: {character.VisualPrompt}. Personality cue: {character.Personality}. Style: {style}. Soft cinematic lighting, realistic anatomy, no readable text, no logos.";
 }
 
-static string BuildShotStartImagePrompt(Project project, Scene scene, Shot shot)
+static string BuildShotStartImagePrompt(Project project, Scene scene, Shot shot, IEnumerable<Character> characters)
 {
     var style = RequiredText(project.VisualStylePrompt, "cinematic realism, coherent production design");
     var lighting = RequiredText(project.LightingStyle, "motivated cinematic lighting");
-    return $"English keyframe image prompt for Wan2.2 image-to-video. Scene {scene.Index}: {scene.Title}. Environment: {scene.Location}, {scene.TimeOfDay}. Mood: {scene.Mood}. Composition: {shot.ShotType}. Character placement and action: {shot.Action}. Camera angle and motion intent: {shot.CameraMotion}. Lighting: {lighting}. Visual style: {style}. Historically and culturally consistent production design. No spoken dialogue, no readable text, no logos, no subtitles, no UI words.";
+    var shotText = $"{shot.Action} {shot.Prompt} {scene.Summary} {scene.RequiredCharactersJson}";
+    var characterLocks = string.Join(" ", characters
+        .Where(character => shotText.Contains(character.Name, StringComparison.OrdinalIgnoreCase))
+        .Select(character => $"{character.Name}: {character.VisualPrompt}"));
+    var characterText = string.IsNullOrWhiteSpace(characterLocks) ? "" : $"Character visual locks: {characterLocks}. ";
+    return $"English keyframe image prompt for Wan2.2 image-to-video. Scene {scene.Index}: {scene.Title}. {characterText}Environment: {scene.Location}, {scene.TimeOfDay}. Mood: {scene.Mood}. Composition: {shot.ShotType}. Character placement and action: {shot.Action}. Camera angle and motion intent: {shot.CameraMotion}. Lighting: {lighting}. Visual style: {style}. Historically and culturally consistent production design. No spoken dialogue, no readable text, no logos, no subtitles, no UI words.";
 }
 
 static string RequiredText(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
@@ -1953,6 +2056,26 @@ static string? TryBuildMediaUrl(string? localPath, string bucket, Guid projectId
     return $"/media/{bucket}/{projectId}/{fileName}";
 }
 
+static AssemblyRules GetAssemblyRules(int targetDurationSeconds)
+{
+    if (targetDurationSeconds >= 420)
+    {
+        return new AssemblyRules(true, 50, (int)Math.Ceiling(targetDurationSeconds * 0.85));
+    }
+
+    if (targetDurationSeconds >= 300)
+    {
+        return new AssemblyRules(true, 40, (int)Math.Ceiling(targetDurationSeconds * 0.90));
+    }
+
+    if (targetDurationSeconds >= 180)
+    {
+        return new AssemblyRules(true, 24, (int)Math.Ceiling(targetDurationSeconds * 0.90));
+    }
+
+    return new AssemblyRules(false, 1, 1);
+}
+
 static (string size, int frameNum, int sampleSteps) GetPresetSettings(RenderPreset preset)
 {
     return preset switch
@@ -1963,3 +2086,5 @@ static (string size, int frameNum, int sampleSteps) GetPresetSettings(RenderPres
         _ => ("1280*704", 25, 5)
     };
 }
+
+public sealed record AssemblyRules(bool IsLongForm, int MinimumShots, int MinimumTargetDurationSeconds);

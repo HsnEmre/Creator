@@ -407,6 +407,8 @@ export default function StoryboardStep({
   useShotStartImage,
   useCharacterReferenceInPrompt,
   hasAnyShotStartImage,
+  durationPlanSummary,
+  continuitySummary,
   isBusy,
   hasRunningRenderVideo,
   onSelectShot,
@@ -418,7 +420,8 @@ export default function StoryboardStep({
   onGenerateShotStartImage,
   onAnimateSelected,
   onAnimateAll,
-  onRegenerateAll
+  onRegenerateAll,
+  onRegeneratePlan
 }) {
   const shots = useMemo(() => normalizePlanShots(plan), [plan]);
   const selectedShotId = selectedShotIds[0] || shots[0]?.id || null;
@@ -440,6 +443,7 @@ export default function StoryboardStep({
   );
   const missingRenderCount = Math.max(0, shots.length - completedShotCount);
   const summary = durationPlanSummary || {};
+  const continuity = continuitySummary || {};
 
   if (!plan) {
     return (
@@ -512,7 +516,48 @@ export default function StoryboardStep({
       </section>
 
       {summary.isDurationPlanValid === false || summary.durationPlanWarning ? (
-        <p className="msg error compact-msg">{summary.durationPlanWarning || "Storyboard is too short for the target duration. Analyze again before rendering the full film."}</p>
+        <div className="msg error compact-msg storyboard-warning-action">
+          <span>{summary.durationPlanWarning || "Storyboard is too short for the target duration. Regenerate plan."}</span>
+          {onRegeneratePlan ? (
+            <button type="button" disabled={isBusy} onClick={onRegeneratePlan}>
+              Regenerate plan
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <section className={`storyboard-continuity-summary ${continuity.characterVisualLocksApplied === false ? "invalid" : ""}`}>
+        <div>
+          <span className="muted">Character bible</span>
+          <b>{continuity.hasContinuityBible ? "Ready" : "Needs analyze"}</b>
+        </div>
+        <div>
+          <span className="muted">Visual locks</span>
+          <b>{continuity.characterVisualLocksApplied ? "Applied" : "Check prompts"}</b>
+        </div>
+        <div>
+          <span className="muted">Negative prompts</span>
+          <b>{continuity.distinctNegativePromptCount ?? 0} distinct</b>
+        </div>
+        <div>
+          <span className="muted">References</span>
+          <b>{continuity.characterReferenceCount ?? 0}/{continuity.characterCount ?? 0}</b>
+        </div>
+        <div>
+          <span className="muted">Keyframes</span>
+          <b>{continuity.shotStartImageCount ?? 0}/{continuity.shotCount ?? shots.length}</b>
+        </div>
+        <div>
+          <span className="muted">I2V renders</span>
+          <b>{continuity.startImagesUsedByVideoCount ?? 0}</b>
+        </div>
+      </section>
+
+      {continuity.continuityWarning ? <p className="msg error compact-msg">{continuity.continuityWarning}</p> : null}
+      {(continuity.characterReferenceCount ?? 0) > 0 && (continuity.startImagesUsedByVideoCount ?? 0) === 0 ? (
+        <p className="msg compact-msg storyboard-keyframe-note">
+          Character reference images are available, but this render backend is using text-only conditioning unless a shot keyframe is used as Image-to-Video.
+        </p>
       ) : null}
 
       {!hasAnyShotStartImage ? (

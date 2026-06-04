@@ -71,6 +71,26 @@ class FFmpegService:
         total_source_duration = sum(duration or 0 for duration in source_durations)
         total_target_duration = sum(segment["target_duration_seconds"] for segment in normalized_segments)
         log_perf(
+            "ffmpeg_assembly_plan_validation_started",
+            video_count=len(normalized_segments),
+            total_target_duration_seconds=round(total_target_duration, 3),
+            output_path=output_path,
+        )
+        if total_target_duration <= 0:
+            log_perf(
+                "ffmpeg_assembly_plan_validation_failed",
+                video_count=len(normalized_segments),
+                total_target_duration_seconds=round(total_target_duration, 3),
+                output_path=output_path,
+            )
+            raise RuntimeError("Assembly plan has no positive target duration.")
+        log_perf(
+            "ffmpeg_assembly_plan_validation_completed",
+            video_count=len(normalized_segments),
+            total_target_duration_seconds=round(total_target_duration, 3),
+            output_path=output_path,
+        )
+        log_perf(
             "ffmpeg_assembly_duration_plan",
             video_count=len(normalized_segments),
             total_source_duration_seconds=round(total_source_duration, 3),
@@ -119,6 +139,17 @@ class FFmpegService:
                     video_path=segment["video_path"],
                     output_path=segment_output,
                 )
+                segment_duration = self.get_duration_seconds(segment_output)
+                log_perf(
+                    "ffmpeg_assembly_segment_normalized",
+                    scene_index=segment.get("scene_index"),
+                    shot_index=segment.get("shot_index"),
+                    shot_id=segment.get("shot_id"),
+                    render_job_id=segment.get("render_job_id"),
+                    source_duration_seconds=source_duration,
+                    target_shot_duration_seconds=segment["target_duration_seconds"],
+                    output_segment_duration_seconds=segment_duration,
+                )
 
             with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as list_file:
                 for segment_path in segment_paths:
@@ -135,6 +166,28 @@ class FFmpegService:
         if not Path(output_path).exists() or Path(output_path).stat().st_size <= 0:
             raise RuntimeError(f"ffmpeg duration-locked stitch did not create a valid output: {output_path}")
         output_duration = self.get_duration_seconds(output_path)
+        tolerance_seconds = max(2.0, total_target_duration * 0.02)
+        if output_duration is not None and abs(output_duration - total_target_duration) > tolerance_seconds:
+            log_perf(
+                "ffmpeg_assembly_output_duration_validation_failed",
+                video_count=len(normalized_segments),
+                total_target_duration_seconds=round(total_target_duration, 3),
+                output_duration_seconds=output_duration,
+                tolerance_seconds=round(tolerance_seconds, 3),
+                output_path=output_path,
+            )
+            raise RuntimeError(
+                "Assembled video duration does not match storyboard target duration. "
+                f"target={total_target_duration:.3f}s output={output_duration:.3f}s tolerance={tolerance_seconds:.3f}s"
+            )
+        log_perf(
+            "ffmpeg_assembly_output_duration_validation_completed",
+            video_count=len(normalized_segments),
+            total_target_duration_seconds=round(total_target_duration, 3),
+            output_duration_seconds=output_duration,
+            tolerance_seconds=round(tolerance_seconds, 3),
+            output_path=output_path,
+        )
         log_perf(
             "ffmpeg_assembly_completed",
             video_count=len(normalized_segments),
@@ -276,7 +329,7 @@ class FFmpegService:
         except (TypeError, ValueError):
             target_duration_seconds = 0.0
         if target_duration_seconds <= 0:
-            target_duration_seconds = 5.0
+            raise RuntimeError(f"Assembly segment has invalid targetDurationSeconds: {segment}")
 
         return {
             "video_path": str(video_path),

@@ -40,6 +40,11 @@ public sealed record ProductionPlanDto(
     public int PlannedDurationCoveragePercent { get; init; }
     public bool IsDurationPlanValid { get; init; }
     public string? DurationPlanWarning { get; init; }
+    public bool HasContinuityBible { get; init; }
+    public bool CharacterVisualLocksApplied { get; init; }
+    public int DistinctNegativePromptCount { get; init; }
+    public int DuplicateNegativePromptGroups { get; init; }
+    public string? ContinuityWarning { get; init; }
 };
 
 public sealed record VisualStyleDto(string StylePrompt, string NegativePrompt, string CameraStyle, string LightingStyle, string ColorPalette);

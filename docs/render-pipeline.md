@@ -53,7 +53,31 @@ ComfyUI is not used anywhere in this pipeline.
    * `storyboard_duration_repair_completed`
    * `storyboard_duration_validation_completed`
 
-7. `GET /api/projects/{id}/production-plan` reconstructs the saved production plan from SQL Server and includes duration-health metadata:
+7. The normalizer also enforces cinematic continuity from the fields already persisted in SQL Server:
+
+   * each character gets a stable visual lock prompt and continuity rules
+   * every relevant shot repeats involved character visual locks
+   * recurring scene location, time of day, mood, lighting, and color are repeated in shot prompts
+   * Turkish dialogue or narration stays in dialogue fields, not visual prompts
+   * visual prompts and negative prompts are kept in English
+   * generated start image prompts include character locks and location continuity
+
+8. Negative prompts are composed per shot instead of copied as identical boilerplate. The deterministic negative prompt builder combines:
+
+   * global technical negatives
+   * character continuity negatives when characters are present
+   * location/era/weather negatives
+   * shot-context negatives for battle, palace, night mountain, village, forest, and fallback continuity cases
+
+   Negative prompt validation logs:
+
+   * `storyboard_negative_prompt_validation_started`
+   * `storyboard_negative_prompt_validation_failed`
+   * `storyboard_negative_prompt_repair_started`
+   * `storyboard_negative_prompt_repair_completed`
+   * `storyboard_negative_prompt_validation_completed`
+
+9. `GET /api/projects/{id}/production-plan` reconstructs the saved production plan from SQL Server and includes duration and continuity health metadata:
 
    * `sceneCount`
    * `shotCount`
@@ -62,15 +86,22 @@ ComfyUI is not used anywhere in this pipeline.
    * `plannedDurationCoveragePercent`
    * `isDurationPlanValid`
    * `durationPlanWarning`
+   * `hasContinuityBible`
+   * `characterVisualLocksApplied`
+   * `distinctNegativePromptCount`
+   * `duplicateNegativePromptGroups`
+   * `continuityWarning`
 
-8. `POST /api/projects/{id}/preproduction/prepare` creates or refreshes MagicLight-style visual preparation prompts:
+10. Existing projects created before these continuity/duration rules can be repaired by running Analyze again. Analyze replaces storyboard plan records safely while preserving completed final videos and generated media files on disk.
+
+11. `POST /api/projects/{id}/preproduction/prepare` creates or refreshes MagicLight-style visual preparation prompts:
 
    * Character reference image prompts in English
    * Character reference negative prompts
    * Shot start image / keyframe prompts in English
    * Shot start image negative prompts
 
-9. The frontend lets the user review, edit, copy, generate, or manually upload these visual assets before rendering.
+12. The frontend lets the user review, edit, copy, generate, or manually upload these visual assets before rendering.
 
 ---
 
@@ -198,6 +229,17 @@ When `force=false` or omitted, render creation skips shots that already have an 
 
 31. If only character references exist and no shot start image exists, the render remains `TextToVideo`.
 
+31a. Render-job creation logs the active image-conditioning path:
+
+* `character_reference_lock_applied`
+* `shot_reference_image_selected`
+* `shot_start_image_selected`
+* `shot_start_image_missing`
+* `shot_start_image_used_for_video`
+* `shot_start_image_not_supported_for_video`
+
+Character reference images are logged as prompt identity guidance. They are not faked as Wan2.2 image conditioning. Shot start images are the only generated images passed as Wan2.2 `--image` in the current architecture.
+
 32. `useCharacterReference` is kept as a backward-compatible alias for `useCharacterReferenceInPrompt`.
 
 33. For best I2V results, upload a scene-like `1280x704` image with the character already placed in the desired environment and composition.
@@ -293,21 +335,31 @@ Do not change quality or offload defaults until diagnostics show the real bottle
    * render job id
    * planned `targetDurationSeconds`
 
-38. The Python worker duration-locks assembly segments before concat. Short source clips are looped/held to the target shot duration, and long source clips are trimmed to the target duration. This preserves the storyboard timing while still using the latest completed render for each shot.
+38. Before queueing assembly, the API validates long-form storyboard plans. A long-form project cannot assemble if the saved storyboard is below the bucket minimum, has missing/zero target durations, or has too little total planned duration. A 180-second project producing only a few seconds of target segments is rejected with a clear error instead of silently assembling.
 
-39. The worker logs:
+39. The Python worker duration-locks assembly segments before concat. Short source clips are looped/held to the target shot duration, and long source clips are trimmed to the target duration. This preserves the storyboard timing while still using the latest completed render for each shot. FastPreview clips are short Wan renders; long previews may therefore loop/hold/extend short generated clips. This is a preview assembly strategy, not true long generated motion.
 
+40. The worker validates final assembled duration against the sum of target shot durations. Tolerance is `max(2 seconds, 2 percent of total target duration)`. If a 180-second storyboard produces a 9.375-second output, the assembly job fails.
+
+41. The API and worker log:
+
+   * `ffmpeg_assembly_plan_validation_started`
+   * `ffmpeg_assembly_plan_validation_failed`
+   * `ffmpeg_assembly_plan_validation_completed`
    * `ffmpeg_assembly_selected_shot`
+   * `ffmpeg_assembly_segment_normalized`
    * `ffmpeg_assembly_duration_plan`
+   * `ffmpeg_assembly_output_duration_validation_failed`
+   * `ffmpeg_assembly_output_duration_validation_completed`
    * `ffmpeg_assembly_completed`
 
-40. The Python worker writes the assembled movie to:
+42. The Python worker writes the assembled movie to:
 
 ```text
 storage/finals/{projectId}/assembled.mp4
 ```
 
-41. Dialogue lines are persisted and can be queued into `GenerateAudio` jobs for Edge TTS.
+43. Dialogue lines are persisted and can be queued into `GenerateAudio` jobs for Edge TTS.
 
 42. `POST /api/projects/{id}/finalize` prefers `assembled.mp4` when present.
 
@@ -325,7 +377,7 @@ storage/finals/{projectId}/final-preview.mp4
 
 47. If the audio duration is shorter than the assembled video duration, FFmpeg pads audio with silence so the video is not cut to the audio length.
 
-48. Final output duration must match the input video duration, not the audio duration. Mux logs include the input video duration, audio duration, whether audio is shorter or longer, and the final output duration.
+50. Final output duration must match the input video duration, not the audio duration. Mux logs include the input video duration, audio duration, whether audio is shorter or longer, and the final output duration.
 
 ---
 
@@ -362,12 +414,25 @@ The Storyboard UI shows the latest render state per shot:
 * completed render indicator
 * latest render duration when `StartedAt` and `FinishedAt` are available
 * target duration, planned duration, scene count, shot count, and coverage
+* continuity bible status
+* character visual lock status
+* distinct negative prompt count
+* character reference image availability
+* shot keyframe availability
+* whether completed renders used Image-to-Video or text-only fallback
 * keyframe/Image-to-Video state
 * whether "Animate Missing" will skip already completed shots
 
 "Animate Selected" is the explicit regeneration path for the selected shot. "Animate Missing" sends all storyboard shot IDs with `force=false`, allowing the backend to skip completed or already-active shots. "Regenerate All" sends the same shot IDs with `force=true` for intentional full rerenders.
 
 VAE decode remains the dominant runtime bottleneck for Wan2.2 renders. The render reuse and assembly selection rules reduce unnecessary work, but they do not optimize VAE decode.
+
+Future work:
+
+* true long-duration render profiles rather than preview loop/hold assembly
+* deeper image-conditioned character reference support only if the architecture later supports it
+* IP-Adapter-like or reference-conditioning workflows only through Python worker adapters, never through ComfyUI
+* richer plan versioning for preserving multiple storyboard generations side-by-side
 
 ---
 

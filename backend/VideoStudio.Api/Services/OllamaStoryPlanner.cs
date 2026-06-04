@@ -187,6 +187,7 @@ For short projects below 180 seconds, shots should usually be between 3 and 6 se
 For long-form projects of 180 seconds or more, every shot must be between 5 and 8 seconds.
 Character visual descriptions must stay consistent across all scenes and shots.
 For every character, keep age, face, hair, clothing, and personality stable.
+Treat every character as part of a continuity bible: include age range, face, hair, body type, clothing, and signature props inside visualPrompt and continuityRules.
 Every character must include visualPrompt, voiceStyle, and continuityRules.
 Every character must include referenceImagePrompt and referenceImageNegativePrompt in English.
 Character visualPrompt and voiceStyle must be in English.
@@ -203,10 +204,16 @@ Every shot must include startImagePrompt and startImageNegativePrompt in English
 Every shot must include cameraMotion, action, shotType, audioCue, and continuityNotes.
 Every wanPrompt must include character visual lock if a character appears in that shot.
 Every wanPrompt must include scene environment, action, camera motion, mood, cinematic style, and lighting.
+Every wanPrompt must describe one simple visible action only.
+Every wanPrompt must repeat stable character visual locks and recurring location continuity when relevant.
 Every startImagePrompt must describe a complete keyframe composition: environment, character placement, camera angle, lighting, mood, visual style, and historically or culturally consistent details.
+Every startImagePrompt must include involved character visual locks and location continuity when relevant.
 No spoken dialogue belongs in wanPrompt or startImagePrompt.
 Avoid readable text, logos, signs, subtitles, and UI words in image prompts.
 Every negativePrompt must include: low quality, watermark, text, logo, distorted face, inconsistent character, bad hands, extra fingers, extra limbs, flicker, blurry, deformed body.
+Every negativePrompt must also include scene-specific and shot-specific failure terms. Do not return the exact same negativePrompt for every shot unless the shots are genuinely identical.
+Use stable recurring locations; do not make every shot a new world.
+Do not introduce new major characters unless the story requires them.
 The plan must be suitable for long-form video generation.
 If the requested target duration is long, break it into many short shots and many scenes.
 Do not return a tiny 1-scene or 3-shot plan for a multi-minute target.

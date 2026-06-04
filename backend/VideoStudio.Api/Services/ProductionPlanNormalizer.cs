@@ -80,6 +80,8 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             throw new InvalidOperationException($"Production plan is too short for the requested duration. {validation.Warning}");
         }
 
+        normalized = ValidateAndRepairNegativePrompts(normalized, characters, projectId);
+
         logger.LogInformation(
             "storyboard_duration_validation_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} totalPlannedDurationSeconds={TotalPlannedDurationSeconds} plannedDurationCoveragePercent={CoveragePercent} isDurationPlanValid={IsDurationPlanValid}",
             projectId,
@@ -102,6 +104,21 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
         var coverage = target > 0 ? (int)Math.Round((double)plannedDuration / target * 100) : 0;
         var rules = DurationPlanningRules.For(target);
         var validation = ValidateDurationPlan(plan, rules);
+        var distinctNegativePrompts = plan.Scenes
+            .SelectMany(s => s.Shots)
+            .Select(s => NormalizePromptKey(s.NegativePrompt))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        var duplicateNegativePromptGroups = plan.Scenes
+            .SelectMany(s => s.Shots)
+            .GroupBy(s => NormalizePromptKey(s.NegativePrompt), StringComparer.OrdinalIgnoreCase)
+            .Count(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1);
+        var characterLocksApplied = plan.Characters.Count > 0
+            && plan.Scenes.SelectMany(s => s.Shots).All(shot => ContainsAnyCharacterLock(shot.WanPrompt, plan.Characters) || !ShotLikelyHasCharacter(shot, plan.Characters));
+        var continuityWarning = !characterLocksApplied && plan.Characters.Count > 0
+            ? "Some shots may be missing character visual locks. Regenerate plan to apply the current continuity composer."
+            : null;
         return plan with
         {
             SceneCount = sceneCount,
@@ -109,7 +126,12 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             TotalPlannedDurationSeconds = plannedDuration,
             PlannedDurationCoveragePercent = coverage,
             IsDurationPlanValid = validation.IsValid,
-            DurationPlanWarning = warning ?? validation.Warning
+            DurationPlanWarning = warning ?? validation.Warning,
+            HasContinuityBible = plan.Characters.Count > 0 && plan.Characters.All(c => !string.IsNullOrWhiteSpace(c.VisualPrompt) && c.ContinuityRules.Count > 0),
+            CharacterVisualLocksApplied = characterLocksApplied,
+            DistinctNegativePromptCount = distinctNegativePrompts,
+            DuplicateNegativePromptGroups = duplicateNegativePromptGroups,
+            ContinuityWarning = continuityWarning
         };
     }
 
@@ -203,6 +225,7 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             var cameraMotion = Required(source.CameraMotion, shotIndex % 2 == 0 ? "slow lateral tracking movement" : "gentle cinematic push-in");
             var wanPrompt = BuildWanPrompt(scene, visualStyle, action, shotType, cameraMotion, characterLocks);
             var startImagePrompt = BuildShotStartImagePrompt(scene, visualStyle, action, shotType, cameraMotion, characterLocks);
+            var negativePrompt = BuildNegativePrompt(scene, source, requiredCharacters);
             shots.Add(new ShotPlanDto(
                 shotIndex,
                 durationSeconds,
@@ -210,12 +233,12 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
                 cameraMotion,
                 action,
                 wanPrompt,
-                MergeNegativePrompt(source.NegativePrompt),
+                negativePrompt,
                 Required(source.AudioCue, "subtle scene ambience"),
                 $"{Required(source.ContinuityNotes, "Maintain visual continuity.")} Keep character visual locks and location continuity stable across the long-form sequence.")
             {
                 StartImagePrompt = Required(source.StartImagePrompt, startImagePrompt),
-                StartImageNegativePrompt = Required(source.StartImageNegativePrompt, StrongNegativePrompt)
+                StartImageNegativePrompt = Required(source.StartImageNegativePrompt, BuildImageNegativePrompt(scene, source))
             });
         }
 
@@ -273,21 +296,23 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             var shotType = Required(shot.ShotType, "medium shot");
             var cameraMotion = Required(shot.CameraMotion, "slow cinematic camera movement");
             var action = Required(shot.Action, Required(scene.Summary, "A focused cinematic action beat."));
+            var composedPrompt = BuildWanPrompt(scene, visualStyle, action, shotType, cameraMotion, characterLocks);
+            var negativePrompt = BuildNegativePrompt(scene, shot, requiredCharacters);
             shots.Add(new ShotPlanDto(
                 index,
                 duration,
                 shotType,
                 cameraMotion,
                 action,
-                Required(shot.WanPrompt, BuildWanPrompt(scene, visualStyle, action, shotType, cameraMotion, characterLocks)),
-                MergeNegativePrompt(shot.NegativePrompt),
+                composedPrompt,
+                negativePrompt,
                 Required(shot.AudioCue, "subtle scene ambience"),
                 Required(shot.ContinuityNotes, "Maintain character and scene continuity."))
             {
                 Id = shot.Id,
                 SceneId = shot.SceneId,
-                StartImagePrompt = Required(shot.StartImagePrompt, BuildShotStartImagePrompt(scene, visualStyle, action, shotType, cameraMotion, characterLocks)),
-                StartImageNegativePrompt = Required(shot.StartImageNegativePrompt, StrongNegativePrompt),
+                StartImagePrompt = BuildShotStartImagePrompt(scene, visualStyle, action, shotType, cameraMotion, characterLocks),
+                StartImageNegativePrompt = BuildImageNegativePrompt(scene, shot),
                 StartImageStatus = shot.StartImageStatus,
                 StartImagePath = shot.StartImagePath,
                 StartImageUrl = shot.StartImageUrl
@@ -380,7 +405,7 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
     private static string BuildWanPrompt(ScenePlanDto scene, VisualStyleDto visualStyle, string action, string shotType, string cameraMotion, string characterLocks)
     {
         var characterText = string.IsNullOrWhiteSpace(characterLocks) ? "No dialogue text or readable signage." : $"Character visual locks: {characterLocks}.";
-        return $"English Wan2.2 video prompt. {characterText} Scene environment: {Required(scene.Location, "cinematic environment")}, {Required(scene.TimeOfDay, "motivated time of day")}. Action: {action}. Shot type: {shotType}. Camera motion: {cameraMotion}. Mood: {Required(scene.Mood, "cinematic mood")}. Style: {visualStyle.StylePrompt}. Lighting: {visualStyle.LightingStyle}. Realistic faces, stable identity, consistent clothing, coherent anatomy, no readable text or logos.";
+        return $"Cinematic fantasy film shot, one simple visible action: {action}. {characterText} Location continuity: {Required(scene.Location, "cinematic environment")}, {Required(scene.TimeOfDay, "motivated time of day")}, {Required(scene.Mood, "cinematic mood")}. Camera: {shotType}, {cameraMotion}. Lighting and color: {visualStyle.LightingStyle}, {visualStyle.ColorPalette}. Style: {visualStyle.StylePrompt}. Maintain continuity with previous shot: {Required(scene.Summary, "the same narrative beat continues")}. No subtitles, no text, no logos, no spoken dialogue in the visual prompt.";
     }
 
     private static string BuildShotStartImagePrompt(ScenePlanDto scene, VisualStyleDto visualStyle, string action, string shotType, string cameraMotion, string characterLocks)
@@ -412,6 +437,127 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
         return string.Join(" ", locks);
     }
 
+    private ProductionPlanDto ValidateAndRepairNegativePrompts(ProductionPlanDto plan, List<CharacterPlanDto> characters, Guid? projectId)
+    {
+        var allShots = plan.Scenes.SelectMany(scene => scene.Shots.Select(shot => new { Scene = scene, Shot = shot })).ToList();
+        var shotCount = allShots.Count;
+        var distinctCount = allShots.Select(item => NormalizePromptKey(item.Shot.NegativePrompt)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var duplicateGroups = allShots
+            .GroupBy(item => NormalizePromptKey(item.Shot.NegativePrompt), StringComparer.OrdinalIgnoreCase)
+            .Count(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
+
+        logger.LogInformation(
+            "storyboard_negative_prompt_validation_started projectId={ProjectId} shotCount={ShotCount} distinctNegativePromptCount={DistinctNegativePromptCount} duplicateNegativePromptGroups={DuplicateNegativePromptGroups}",
+            projectId,
+            shotCount,
+            distinctCount,
+            duplicateGroups);
+
+        var minimumDistinct = shotCount >= 12 ? Math.Min(shotCount, 6) : Math.Min(shotCount, 3);
+        if (shotCount > 1 && distinctCount < minimumDistinct)
+        {
+            logger.LogWarning(
+                "storyboard_negative_prompt_validation_failed projectId={ProjectId} shotCount={ShotCount} distinctNegativePromptCount={DistinctNegativePromptCount} duplicateNegativePromptGroups={DuplicateNegativePromptGroups}",
+                projectId,
+                shotCount,
+                distinctCount,
+                duplicateGroups);
+            logger.LogInformation("storyboard_negative_prompt_repair_started projectId={ProjectId} shotCount={ShotCount}", projectId, shotCount);
+
+            var repairedScenes = plan.Scenes
+                .Select(scene => scene with
+                {
+                    Shots = scene.Shots.Select(shot =>
+                    {
+                        var involvedCharacters = NormalizeRequiredCharacters(scene.RequiredCharacters, scene, characters);
+                        return shot with { NegativePrompt = BuildNegativePrompt(scene, shot, involvedCharacters) };
+                    }).ToList()
+                })
+                .ToList();
+            plan = plan with { Scenes = repairedScenes };
+            allShots = plan.Scenes.SelectMany(scene => scene.Shots.Select(shot => new { Scene = scene, Shot = shot })).ToList();
+            distinctCount = allShots.Select(item => NormalizePromptKey(item.Shot.NegativePrompt)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            duplicateGroups = allShots
+                .GroupBy(item => NormalizePromptKey(item.Shot.NegativePrompt), StringComparer.OrdinalIgnoreCase)
+                .Count(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1);
+
+            logger.LogInformation(
+                "storyboard_negative_prompt_repair_completed projectId={ProjectId} shotCount={ShotCount} distinctNegativePromptCount={DistinctNegativePromptCount} duplicateNegativePromptGroups={DuplicateNegativePromptGroups}",
+                projectId,
+                shotCount,
+                distinctCount,
+                duplicateGroups);
+        }
+
+        logger.LogInformation(
+            "storyboard_negative_prompt_validation_completed projectId={ProjectId} shotCount={ShotCount} distinctNegativePromptCount={DistinctNegativePromptCount} duplicateNegativePromptGroups={DuplicateNegativePromptGroups}",
+            projectId,
+            shotCount,
+            distinctCount,
+            duplicateGroups);
+
+        return plan;
+    }
+
+    private static string BuildNegativePrompt(ScenePlanDto scene, ShotPlanDto shot, List<string> involvedCharacters)
+    {
+        var parts = new List<string>
+        {
+            "low quality, blurry, low resolution, watermark, text, logo, extra fingers, deformed hands, distorted face, bad anatomy, duplicate body, flicker, jitter, inconsistent lighting, broken motion, frame tearing"
+        };
+
+        if (involvedCharacters.Count > 0)
+        {
+            parts.Add("different face, different hairstyle, different costume, changing age, changing ethnicity, changing body shape, inconsistent armor, inconsistent clothing colors, missing signature prop");
+        }
+
+        parts.Add("wrong era, modern objects, cars, neon signs, electric wires, inconsistent architecture, wrong weather, wrong time of day, location mismatch");
+        parts.Add(BuildContextNegativePrompt(scene, shot));
+        return string.Join(", ", parts)
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Aggregate((current, next) => $"{current}, {next}");
+    }
+
+    private static string BuildImageNegativePrompt(ScenePlanDto scene, ShotPlanDto shot)
+    {
+        return $"{StrongNegativePrompt}, {BuildContextNegativePrompt(scene, shot)}";
+    }
+
+    private static string BuildContextNegativePrompt(ScenePlanDto scene, ShotPlanDto shot)
+    {
+        var text = $"{scene.Title} {scene.Summary} {scene.Location} {scene.Mood} {shot.Action} {shot.ShotType}".ToLowerInvariant();
+        var negatives = new List<string>();
+        if (ContainsAny(text, "battle", "war", "sword", "army", "combat", "siege", "duel"))
+        {
+            negatives.Add("peaceful empty battlefield, clean armor, static pose, no impact, toy weapons");
+        }
+        if (ContainsAny(text, "palace", "throne", "royal", "court", "castle"))
+        {
+            negatives.Add("outdoor landscape, modern furniture, office lighting, casual clothes");
+        }
+        if (ContainsAny(text, "night", "mountain", "snow", "cliff", "cave"))
+        {
+            negatives.Add("daylight, city skyline, beach, tropical plants");
+        }
+        if (ContainsAny(text, "village", "market", "street", "farm", "town"))
+        {
+            negatives.Add("futuristic buildings, asphalt road, cars, plastic objects");
+        }
+        if (ContainsAny(text, "forest", "woods", "tree", "river"))
+        {
+            negatives.Add("concrete buildings, fluorescent lights, urban traffic, plastic props");
+        }
+
+        if (negatives.Count == 0)
+        {
+            negatives.Add($"wrong location for {Required(scene.Location, "the scene")}, mismatched mood, unrelated action, visual discontinuity from scene {scene.Index} shot {shot.Index}");
+        }
+
+        negatives.Add($"wrong scene index {scene.Index}, wrong shot action, unrelated characters, inconsistent continuity");
+        return string.Join(", ", negatives);
+    }
+
     private static string MergeNegativePrompt(string? negativePrompt)
     {
         if (string.IsNullOrWhiteSpace(negativePrompt))
@@ -434,6 +580,28 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
     private static string Required(string? value, string fallback)
     {
         return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+    }
+
+    private static bool ContainsAny(string text, params string[] terms)
+    {
+        return terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool ContainsAnyCharacterLock(string prompt, List<CharacterPlanDto> characters)
+    {
+        return characters.Any(character => prompt.Contains(character.Name, StringComparison.OrdinalIgnoreCase)
+            && prompt.Contains(character.VisualPrompt, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool ShotLikelyHasCharacter(ShotPlanDto shot, List<CharacterPlanDto> characters)
+    {
+        var text = $"{shot.Action} {shot.WanPrompt} {shot.ContinuityNotes}";
+        return characters.Any(character => text.Contains(character.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizePromptKey(string? prompt)
+    {
+        return string.IsNullOrWhiteSpace(prompt) ? string.Empty : string.Join(" ", prompt.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
     }
 
     private sealed record DurationValidationResult(
