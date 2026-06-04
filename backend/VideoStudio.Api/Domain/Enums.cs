@@ -51,6 +51,13 @@ public enum RenderPreset
     Final
 }
 
+public enum RenderDurationMode
+{
+    FastPreview,
+    CinematicPreview,
+    LongMotion
+}
+
 public enum VideoGenerationMode
 {
     TextToVideo,

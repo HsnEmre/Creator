@@ -9,7 +9,7 @@ public sealed class PromptCompiler(ILogger<PromptCompiler> logger)
     private const string DefaultNegative = "low quality, blurry, low resolution, watermark, text, logo, extra fingers, deformed hands, distorted face, bad anatomy, duplicate body, flicker, jitter, inconsistent lighting, broken motion, frame tearing";
     private static readonly Regex CorporateTextRegex = new(@"\b[A-Z0-9]{2,}(?:\s+[A-Z0-9]{2,})+\b", RegexOptions.Compiled);
 
-    public (string prompt, string negativePrompt) Compile(Project project, Scene scene, Shot shot, IReadOnlyCollection<Character> characters, RenderPreset preset, bool useCharacterReferenceInPrompt = false)
+    public (string prompt, string negativePrompt) Compile(Project project, Scene scene, Shot shot, IReadOnlyCollection<Character> characters, RenderPreset preset, bool useCharacterReferenceInPrompt = false, bool isImageToVideo = false)
     {
         var prompt = new StringBuilder();
         var shotText = $"{shot.Action} {shot.Prompt} {scene.Summary}";
@@ -54,6 +54,7 @@ public sealed class PromptCompiler(ILogger<PromptCompiler> logger)
 
         prompt.Append($"Location continuity: {ValueOr(scene.Location, "cinematic location")}, {ValueOr(scene.TimeOfDay, "motivated time of day")}, mood {ValueOr(scene.Mood, "focused")}. ");
         prompt.Append($"Camera: {ValueOr(shot.ShotType, "medium shot")}, {ValueOr(shot.CameraMotion, "slow controlled movement")}. ");
+        prompt.Append(BuildMotionPrompt(scene, shot, isImageToVideo));
         prompt.Append($"Lighting and color: {ValueOr(project.LightingStyle, "motivated cinematic lighting")}, {ValueOr(project.ColorPalette, "natural cinematic colors")}. ");
         prompt.Append($"Style: {ValueOr(project.VisualStylePrompt, "photorealistic cinematic style")}. ");
         if (preset == RenderPreset.FastPreview && !ContainsExplicitCloseup(shot))
@@ -127,6 +128,67 @@ public sealed class PromptCompiler(ILogger<PromptCompiler> logger)
         }
         negatives.Add($"wrong scene index {scene.Index}, wrong shot action, unrelated characters, inconsistent continuity");
         return string.Join(", ", negatives);
+    }
+
+    private static string BuildMotionPrompt(Scene scene, Shot shot, bool isImageToVideo)
+    {
+        var context = $"{scene.Title} {scene.Summary} {scene.Location} {scene.Mood} {shot.Action} {shot.ShotType} {shot.CameraMotion}".ToLowerInvariant();
+        var primaryAction = SelectPrimaryMotion(context, shot.Action);
+        var environmentalMotion = SelectEnvironmentalMotion(context);
+        var cameraMotion = ValueOr(shot.CameraMotion, "slow cinematic push-in");
+        var prefix = isImageToVideo
+            ? "Animate from the supplied keyframe with clear temporal motion, not a frozen still. "
+            : "Create readable temporal motion. ";
+
+        return $"{prefix}Motion plan: primary action: {primaryAction}; environmental motion: {environmentalMotion}; camera motion: {cameraMotion}. Avoid readable text, subtitles, logos, and dialogue captions. ";
+    }
+
+    private static string SelectPrimaryMotion(string context, string? fallbackAction)
+    {
+        if (ContainsAny(context, "walk", "step", "approach", "enter", "cross"))
+        {
+            return "the character takes one clear deliberate step";
+        }
+        if (ContainsAny(context, "sword", "blade", "duel", "battle", "guard"))
+        {
+            return "the character's hand moves toward the sword and posture tightens";
+        }
+        if (ContainsAny(context, "turn", "look", "glance", "watch"))
+        {
+            return "the character slowly turns their head and shifts their gaze";
+        }
+        if (ContainsAny(context, "torch", "fire", "flame", "candle"))
+        {
+            return "the character steadies their pose as firelight flickers across the face";
+        }
+        if (ContainsAny(context, "ride", "horse", "run", "charge"))
+        {
+            return "the body advances with controlled forward motion";
+        }
+
+        return ValueOr(fallbackAction, "the character performs one simple visible action");
+    }
+
+    private static string SelectEnvironmentalMotion(string context)
+    {
+        if (ContainsAny(context, "torch", "fire", "flame", "candle", "smoke"))
+        {
+            return "torch smoke drifts upward and flame light flickers";
+        }
+        if (ContainsAny(context, "cloak", "mountain", "wind", "cliff", "snow"))
+        {
+            return "cloak edges, hair, and loose fabric move in the wind";
+        }
+        if (ContainsAny(context, "battle", "dust", "road", "desert", "ruin"))
+        {
+            return "dust and small debris drift through the air";
+        }
+        if (ContainsAny(context, "forest", "tree", "river", "rain"))
+        {
+            return "leaves, mist, and background water move subtly";
+        }
+
+        return "subtle fabric, hair, dust, and atmospheric movement";
     }
 
     private static string ReplaceReadableSignText(string input)

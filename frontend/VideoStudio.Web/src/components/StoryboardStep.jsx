@@ -62,6 +62,16 @@ function formatDuration(seconds) {
   return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
 }
 
+function rawClipSecondsFromJob(job) {
+  if (job?.expectedRawClipDurationSeconds !== undefined && job?.expectedRawClipDurationSeconds !== null) {
+    return Number(job.expectedRawClipDurationSeconds);
+  }
+  if (job?.actualFrameNum || job?.frameNum) {
+    return Number(job.actualFrameNum || job.frameNum) / 24;
+  }
+  return null;
+}
+
 function getShotStatus(shot, jobs) {
   const renderJob = getLatestCompletedRender(jobs);
   if (renderJob) return "Rendered";
@@ -144,6 +154,7 @@ function ShotRail({ shots, selectedShotId, jobsByKey, onSelectShot }) {
                 {latestRender ? (
                   <small className="storyboard-render-meta">
                     Latest render {formatDuration(latestRender.durationSeconds) || "ready"}
+                    {rawClipSecondsFromJob(latestRender) ? `, raw ${formatDuration(rawClipSecondsFromJob(latestRender))}` : ""}
                   </small>
                 ) : null}
               </span>
@@ -242,7 +253,8 @@ function ShotPreview({ shot, jobs, onUploadStartImage }) {
         {latestRender ? (
           <p>
             Render: <a href={latestRender.outputUrl ? toAbsoluteApiUrl(latestRender.outputUrl) : undefined} target="_blank" rel="noreferrer">Completed video</a>
-            {latestRender.durationSeconds ? <span className="muted"> ({formatDuration(latestRender.durationSeconds)})</span> : null}
+            {latestRender.durationSeconds ? <span className="muted"> (rendered in {formatDuration(latestRender.durationSeconds)})</span> : null}
+            {rawClipSecondsFromJob(latestRender) ? <span className="muted"> raw clip {formatDuration(rawClipSecondsFromJob(latestRender))}</span> : null}
           </p>
         ) : (
           <p className="muted">No completed render for this shot yet.</p>
@@ -256,12 +268,14 @@ function ShotInspector({
   shot,
   jobs,
   useShotStartImage,
+  renderDurationMode,
   useCharacterReferenceInPrompt,
   hasAnyShotStartImage,
   durationPlanSummary,
   isBusy,
   hasRunningRenderVideo,
   onUseShotStartImageChange,
+  onRenderDurationModeChange,
   onUseCharacterReferenceChange,
   onSaveShotPrompt,
   onGenerateShotStartImage,
@@ -292,6 +306,9 @@ function ShotInspector({
   const completedRender = getLatestCompletedRender(jobs);
   const hasKeyframe = Boolean(shot.startImageUrl || shot.startImagePath);
   const characters = shot.requiredCharacters || shot.sceneRequiredCharacters || [];
+  const targetDurationSeconds = Number(shot.durationSeconds || shot.targetDurationSeconds || 0);
+  const rawClipDurationSeconds = rawClipSecondsFromJob(completedRender);
+  const rawClipIsShort = Boolean(rawClipDurationSeconds && targetDurationSeconds && rawClipDurationSeconds + 0.5 < targetDurationSeconds);
 
   return (
     <aside className="storyboard-inspector">
@@ -365,6 +382,32 @@ function ShotInspector({
       </div>
 
       <div className="storyboard-inspector-section">
+        <h3>Render Profile</h3>
+        <div className="segmented-control render-profile-options" role="radiogroup" aria-label="Render duration profile">
+          {[
+            ["FastPreview", "FastPreview", "Fastest, short motion clips"],
+            ["CinematicPreview", "CinematicPreview", "Slower, more motion"],
+            ["LongMotion", "LongMotion", "Slowest, tries to match shot duration"]
+          ].map(([value, label, help]) => (
+            <label key={value} className={renderDurationMode === value ? "selected" : ""}>
+              <input
+                type="radio"
+                name="renderDurationMode"
+                value={value}
+                checked={renderDurationMode === value}
+                onChange={(event) => onRenderDurationModeChange(event.target.value)}
+              />
+              <span>{label}</span>
+              <small>{help}</small>
+            </label>
+          ))}
+        </div>
+        <p className="muted">
+          FastPreview creates about a 1 second raw clip. Assembly can extend it to the shot timing, but that is not true generated long motion.
+        </p>
+      </div>
+
+      <div className="storyboard-inspector-section">
         <h3>Actions</h3>
         <div className="actions column">
           <button type="button" disabled={isBusy} onClick={() => onGenerateShotStartImage(shot.id)}>
@@ -389,10 +432,25 @@ function ShotInspector({
         <h3>Job Status</h3>
         {runningJob ? <p>Current: <span className="badge badge-rendering">{statusLabel(runningJob.status)}</span></p> : null}
         {completedRender ? (
-          <p>
-            Rendered: <span className="badge badge-completed">Ready</span>
-            {completedRender.durationSeconds ? <span className="muted"> {formatDuration(completedRender.durationSeconds)}</span> : null}
-          </p>
+          <>
+            <p>
+              Rendered: <span className="badge badge-completed">Ready</span>
+              {completedRender.durationSeconds ? <span className="muted"> processing {formatDuration(completedRender.durationSeconds)}</span> : null}
+            </p>
+            <div className="storyboard-render-duration-grid">
+              <span>Target shot</span>
+              <b>{targetDurationSeconds ? formatDuration(targetDurationSeconds) : "Not available"}</b>
+              <span>Raw generated clip</span>
+              <b>{rawClipDurationSeconds ? formatDuration(rawClipDurationSeconds) : "Unknown"}</b>
+              <span>Assembly timing</span>
+              <b>{targetDurationSeconds ? formatDuration(targetDurationSeconds) : "Not available"}</b>
+            </div>
+            {rawClipIsShort ? (
+              <p className="msg error compact-msg">
+                Raw generated motion is shorter than the planned shot. Assembly will extend it, but use CinematicPreview or LongMotion for more real motion.
+              </p>
+            ) : null}
+          </>
         ) : null}
         {!runningJob && !completedRender ? <p className="muted">No render job for this shot yet.</p> : null}
       </div>
@@ -405,6 +463,7 @@ export default function StoryboardStep({
   jobs,
   selectedShotIds,
   useShotStartImage,
+  renderDurationMode,
   useCharacterReferenceInPrompt,
   hasAnyShotStartImage,
   durationPlanSummary,
@@ -413,6 +472,7 @@ export default function StoryboardStep({
   hasRunningRenderVideo,
   onSelectShot,
   onUseShotStartImageChange,
+  onRenderDurationModeChange,
   onUseCharacterReferenceChange,
   onSaveShotPrompt,
   onUploadStartImage,
@@ -571,11 +631,13 @@ export default function StoryboardStep({
           shot={selectedShot}
           jobs={selectedJobs}
           useShotStartImage={useShotStartImage}
+          renderDurationMode={renderDurationMode}
           useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
           hasAnyShotStartImage={hasAnyShotStartImage}
           isBusy={isBusy}
           hasRunningRenderVideo={hasRunningRenderVideo}
           onUseShotStartImageChange={onUseShotStartImageChange}
+          onRenderDurationModeChange={onRenderDurationModeChange}
           onUseCharacterReferenceChange={onUseCharacterReferenceChange}
           onSaveShotPrompt={onSaveShotPrompt}
           onGenerateShotStartImage={onGenerateShotStartImage}

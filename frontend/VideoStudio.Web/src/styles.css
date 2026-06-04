@@ -923,6 +923,51 @@ body {
   color: #c8e3ff !important;
 }
 
+.render-profile-options {
+  display: grid;
+  gap: 8px;
+}
+
+.render-profile-options label {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid rgba(92, 197, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 13, 20, 0.48);
+  cursor: pointer;
+}
+
+.render-profile-options label.selected {
+  border-color: rgba(54, 208, 132, 0.5);
+  background: rgba(54, 208, 132, 0.1);
+}
+
+.render-profile-options input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.render-profile-options span {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.storyboard-render-duration-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 10px;
+  padding: 10px;
+  border: 1px solid rgba(92, 197, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(8, 13, 20, 0.48);
+}
+
+.storyboard-render-duration-grid span {
+  color: var(--muted);
+}
+
 .storyboard-preview-panel {
   display: flex;
   flex-direction: column;

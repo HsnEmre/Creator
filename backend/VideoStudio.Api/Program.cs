@@ -582,6 +582,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
     }
 
     var preset = request?.Preset ?? RenderPreset.FastPreview;
+    var renderDurationMode = request?.RenderDurationMode ?? RenderDurationMode.FastPreview;
     var maxShotsDefault = preset == RenderPreset.FastPreview ? 1 : 3;
     var maxShots = request?.MaxShots is > 0 ? request.MaxShots.Value : maxShotsDefault;
     var force = request?.Force ?? false;
@@ -624,7 +625,6 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             }
         }
 
-        var compiled = promptCompiler.Compile(project, shot.Scene!, shot, project.Characters, preset, useCharacterReferenceInPrompt);
         var inputImagePath = useShotStartImage ? shot.StartImagePath : null;
         if (useShotStartImage && string.IsNullOrWhiteSpace(inputImagePath))
         {
@@ -648,6 +648,14 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
         var generationMode = string.IsNullOrWhiteSpace(inputImagePath)
             ? VideoGenerationMode.TextToVideo
             : VideoGenerationMode.ImageToVideo;
+        var compiled = promptCompiler.Compile(
+            project,
+            shot.Scene!,
+            shot,
+            project.Characters,
+            preset,
+            useCharacterReferenceInPrompt,
+            generationMode == VideoGenerationMode.ImageToVideo);
         if (generationMode == VideoGenerationMode.ImageToVideo)
         {
             logger.LogInformation(
@@ -669,6 +677,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
                 useCharacterReferenceInPrompt && project.Characters.Any(c => !string.IsNullOrWhiteSpace(c.ReferenceImagePath)),
                 "current render path only passes shot start images as Wan2.2 --image; character references are prompt identity guidance");
         }
+        var durationSelection = SelectRenderDuration(renderDurationMode, settings.frameNum, shot.DurationSeconds);
         var renderJob = new RenderJob
         {
             ProjectId = project.Id,
@@ -681,7 +690,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             CompiledPrompt = compiled.prompt,
             NegativePrompt = compiled.negativePrompt,
             Size = settings.size,
-            FrameNum = settings.frameNum,
+            FrameNum = durationSelection.ActualFrameNum,
             SampleSteps = settings.sampleSteps,
             Seed = null,
             InputImagePath = inputImagePath,
@@ -689,6 +698,51 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             InputAudioPath = shot.InputAudioPath,
             Status = RenderJobStatus.Pending
         };
+        logger.LogInformation(
+            "wan_render_duration_mode_selected projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} targetShotDurationSeconds={TargetShotDurationSeconds} renderDurationMode={RenderDurationMode}",
+            project.Id,
+            shot.Scene!.Index,
+            shot.Index,
+            shot.Id,
+            renderJob.Id,
+            durationSelection.RequestedShotDurationSeconds,
+            durationSelection.Mode);
+        logger.LogInformation(
+            "wan_render_frame_count_selected projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} renderDurationMode={RenderDurationMode} requestedFrameNum={RequestedFrameNum} actualFrameNum={ActualFrameNum}",
+            project.Id,
+            shot.Scene!.Index,
+            shot.Index,
+            shot.Id,
+            renderJob.Id,
+            durationSelection.Mode,
+            durationSelection.RequestedFrameNum,
+            durationSelection.ActualFrameNum);
+        if (durationSelection.WasClamped)
+        {
+            logger.LogWarning(
+                "wan_render_frame_count_clamped projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} targetShotDurationSeconds={TargetShotDurationSeconds} requestedFrameNum={RequestedFrameNum} actualFrameNum={ActualFrameNum} maxFrameNum={MaxFrameNum}",
+                project.Id,
+                shot.Scene!.Index,
+                shot.Index,
+                shot.Id,
+                renderJob.Id,
+                durationSelection.RequestedShotDurationSeconds,
+                durationSelection.RequestedFrameNum,
+                durationSelection.ActualFrameNum,
+                RenderDurationMaxFrameNum());
+        }
+        logger.LogInformation(
+            "wan_render_expected_duration projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} targetShotDurationSeconds={TargetShotDurationSeconds} renderDurationMode={RenderDurationMode} requestedFrameNum={RequestedFrameNum} actualFrameNum={ActualFrameNum} expectedRawClipDurationSeconds={ExpectedRawClipDurationSeconds}",
+            project.Id,
+            shot.Scene!.Index,
+            shot.Index,
+            shot.Id,
+            renderJob.Id,
+            durationSelection.RequestedShotDurationSeconds,
+            durationSelection.Mode,
+            durationSelection.RequestedFrameNum,
+            durationSelection.ActualFrameNum,
+            durationSelection.ExpectedRawClipDurationSeconds);
         if (renderJob.GenerationMode == VideoGenerationMode.ImageToVideo)
         {
             logger.LogInformation(
@@ -1180,7 +1234,12 @@ app.MapGet("/api/projects/{id:guid}/render-jobs", async (Guid id, VideoStudioDbC
             j.StartedAt,
             j.FinishedAt,
             RenderDurationSeconds(j),
-            latestSuccessfulRenderIds.Contains(j.Id)))
+            latestSuccessfulRenderIds.Contains(j.Id),
+            InferRenderDurationMode(j).ToString(),
+            j.Shot?.DurationSeconds,
+            RequestedFrameNumForJob(j, j.Shot?.DurationSeconds),
+            j.FrameNum,
+            ExpectedRawClipDurationSeconds(j.FrameNum)))
         .ToList();
 
     return Results.Ok(jobs);
@@ -1734,7 +1793,7 @@ static ProjectSummaryDto ToSummary(Project project) => new(project.Id, project.N
 
 static ProjectDetailsDto ToDetails(Project project) => new(project.Id, project.Name, project.StoryText, project.TargetDurationSeconds, project.Status, project.Logline, project.Genre, project.CreatedAt, project.UpdatedAt);
 
-static RenderJobDto ToRenderJobDto(RenderJob job) => new(job.Id, job.ProjectId, job.SceneId, job.ShotId, job.CharacterId, job.DialogueLineId, job.JobType, job.Preset, job.GenerationMode, job.GenerationMode.ToString(), job.Prompt, job.CompiledPrompt, job.NegativePrompt, job.Size, job.FrameNum, job.SampleSteps, job.Seed, job.InputImagePath, TryBuildMediaUrl(job.InputImagePath, "assets", job.ProjectId), job.InputVideoPath, job.InputAudioPath, job.TextContent, job.Speaker, job.Emotion, job.Language, job.Voice, job.OutputPath, job.Status, job.Progress, job.ErrorMessage, job.CreatedAt, job.StartedAt, job.FinishedAt, RenderDurationSeconds(job));
+static RenderJobDto ToRenderJobDto(RenderJob job) => new(job.Id, job.ProjectId, job.SceneId, job.ShotId, job.CharacterId, job.DialogueLineId, job.JobType, job.Preset, job.GenerationMode, job.GenerationMode.ToString(), job.Prompt, job.CompiledPrompt, job.NegativePrompt, job.Size, job.FrameNum, job.SampleSteps, job.Seed, job.InputImagePath, TryBuildMediaUrl(job.InputImagePath, "assets", job.ProjectId), job.InputVideoPath, job.InputAudioPath, job.TextContent, job.Speaker, job.Emotion, job.Language, job.Voice, job.OutputPath, job.Status, job.Progress, job.ErrorMessage, job.CreatedAt, job.StartedAt, job.FinishedAt, RenderDurationSeconds(job), InferRenderDurationMode(job).ToString(), null, RequestedFrameNumForJob(job, null), job.FrameNum, ExpectedRawClipDurationSeconds(job.FrameNum));
 
 static Dictionary<Guid, RenderJob> LatestCompletedRendersByShot(IEnumerable<RenderJob> jobs)
 {
@@ -2087,4 +2146,80 @@ static (string size, int frameNum, int sampleSteps) GetPresetSettings(RenderPres
     };
 }
 
+static RenderDurationSelection SelectRenderDuration(RenderDurationMode mode, int presetFrameNum, int shotDurationSeconds)
+{
+    var targetSeconds = shotDurationSeconds > 0 ? shotDurationSeconds : 1;
+    return mode switch
+    {
+        RenderDurationMode.CinematicPreview => BuildDurationSelection(mode, targetSeconds, 73, 73),
+        RenderDurationMode.LongMotion => BuildDurationSelection(mode, targetSeconds, FramesForSeconds(targetSeconds), ClampWanFrameCount(FramesForSeconds(targetSeconds), 25, RenderDurationMaxFrameNum())),
+        _ => BuildDurationSelection(RenderDurationMode.FastPreview, targetSeconds, presetFrameNum, presetFrameNum)
+    };
+}
+
+static RenderDurationSelection BuildDurationSelection(RenderDurationMode mode, int requestedShotDurationSeconds, int requestedFrameNum, int actualFrameNum)
+{
+    return new RenderDurationSelection(
+        mode,
+        requestedShotDurationSeconds,
+        requestedFrameNum,
+        actualFrameNum,
+        ExpectedRawClipDurationSeconds(actualFrameNum) ?? 0,
+        requestedFrameNum != actualFrameNum);
+}
+
+static RenderDurationMode InferRenderDurationMode(RenderJob job)
+{
+    if (job.FrameNum is null)
+    {
+        return RenderDurationMode.FastPreview;
+    }
+
+    if (job.FrameNum > 73)
+    {
+        return RenderDurationMode.LongMotion;
+    }
+
+    if (job.FrameNum > 25)
+    {
+        return RenderDurationMode.CinematicPreview;
+    }
+
+    return RenderDurationMode.FastPreview;
+}
+
+static int? RequestedFrameNumForJob(RenderJob job, int? targetDurationSeconds)
+{
+    var mode = InferRenderDurationMode(job);
+    return mode == RenderDurationMode.LongMotion && targetDurationSeconds is > 0
+        ? FramesForSeconds(targetDurationSeconds.Value)
+        : job.FrameNum;
+}
+
+static int FramesForSeconds(int seconds) => ClampWanFrameCount((int)Math.Round(Math.Max(1, seconds) * 24.0), 25, int.MaxValue);
+
+static int ClampWanFrameCount(int requestedFrameNum, int minFrameNum, int maxFrameNum)
+{
+    var clamped = Math.Clamp(requestedFrameNum, minFrameNum, maxFrameNum);
+    var normalized = clamped <= 1 ? 1 : (((clamped - 1) / 4) * 4) + 1;
+    if (normalized < minFrameNum)
+    {
+        normalized = minFrameNum;
+    }
+    if (normalized > maxFrameNum)
+    {
+        normalized = ((maxFrameNum - 1) / 4) * 4 + 1;
+    }
+
+    return normalized;
+}
+
+static double? ExpectedRawClipDurationSeconds(int? frameNum)
+{
+    return frameNum is > 0 ? Math.Round(frameNum.Value / 24.0, 2) : null;
+}
+
+static int RenderDurationMaxFrameNum() => 121;
+
 public sealed record AssemblyRules(bool IsLongForm, int MinimumShots, int MinimumTargetDurationSeconds);
+public sealed record RenderDurationSelection(RenderDurationMode Mode, int RequestedShotDurationSeconds, int RequestedFrameNum, int ActualFrameNum, double ExpectedRawClipDurationSeconds, bool WasClamped);

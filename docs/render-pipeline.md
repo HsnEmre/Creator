@@ -161,6 +161,23 @@ Future provider names such as `FLUX_DEV`, `FLUX_KONTEXT`, and `HIDREAM` are rese
 | `Preview`     | `1280x704` |        `49` |         `10` |
 | `Final`       | `1280x704` |       `121` |         `25` |
 
+13a. Storyboard rendering also supports an optional render duration mode. The default is still `FastPreview`, preserving the existing 25-frame behavior for quick tests.
+
+| Duration mode | Frame selection | Intended use |
+| ------------- | --------------- | ------------ |
+| `FastPreview` | uses the preset frame count, currently `25` for FastPreview | fastest pipeline validation; raw motion is about one second at 24fps |
+| `CinematicPreview` | uses `73` frames with the selected preset's sample steps | slower review clips with more visible motion |
+| `LongMotion` | derives frames from the shot target duration, normalizes to Wan-friendly `4n+1` counts, and clamps to `121` frames | slowest preview mode; tries to approach shot timing without changing global quality defaults |
+
+The API logs duration-mode decisions when render jobs are created:
+
+* `wan_render_duration_mode_selected`
+* `wan_render_frame_count_selected`
+* `wan_render_frame_count_clamped`
+* `wan_render_expected_duration`
+
+These logs include project, scene, shot, render job id, target shot duration, requested frame count, actual frame count, and expected raw clip duration.
+
 14. `maxShots`, `sceneIndex`, and `shotIndex` can limit queueing to a subset for quick iteration.
 
 15. Render targeting supports:
@@ -339,6 +356,8 @@ Do not change quality or offload defaults until diagnostics show the real bottle
 
 39. The Python worker duration-locks assembly segments before concat. Short source clips are looped/held to the target shot duration, and long source clips are trimmed to the target duration. This preserves the storyboard timing while still using the latest completed render for each shot. FastPreview clips are short Wan renders; long previews may therefore loop/hold/extend short generated clips. This is a preview assembly strategy, not true long generated motion.
 
+39a. Use `CinematicPreview` or `LongMotion` when the raw generated clip should contain more real motion before assembly. Assembly still uses the latest valid render per shot and still duration-locks segments to the storyboard timing; it does not turn a one-second FastPreview into true long generated motion.
+
 40. The worker validates final assembled duration against the sum of target shot durations. Tolerance is `max(2 seconds, 2 percent of total target duration)`. If a 180-second storyboard produces a 9.375-second output, the assembly job fails.
 
 41. The API and worker log:
@@ -422,6 +441,9 @@ The Storyboard UI shows the latest render state per shot:
 * whether completed renders used Image-to-Video or text-only fallback
 * keyframe/Image-to-Video state
 * whether "Animate Missing" will skip already completed shots
+* selected render duration mode
+* expected raw generated clip duration when frame metadata is available
+* warnings when the raw generated clip is shorter than the planned shot duration
 
 "Animate Selected" is the explicit regeneration path for the selected shot. "Animate Missing" sends all storyboard shot IDs with `force=false`, allowing the backend to skip completed or already-active shots. "Regenerate All" sends the same shot IDs with `force=true` for intentional full rerenders.
 
@@ -429,7 +451,7 @@ VAE decode remains the dominant runtime bottleneck for Wan2.2 renders. The rende
 
 Future work:
 
-* true long-duration render profiles rather than preview loop/hold assembly
+* higher frame-count render profiles beyond the current safe 121-frame local ceiling
 * deeper image-conditioned character reference support only if the architecture later supports it
 * IP-Adapter-like or reference-conditioning workflows only through Python worker adapters, never through ComfyUI
 * richer plan versioning for preserving multiple storyboard generations side-by-side

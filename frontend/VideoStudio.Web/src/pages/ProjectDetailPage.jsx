@@ -78,6 +78,7 @@ export default function ProjectDetailPage() {
   const [useCharacterReferenceInPrompt, setUseCharacterReferenceInPrompt] = useState(true);
   const [useShotStartImage, setUseShotStartImage] = useState(false);
   const [hasUserSetShotStartImageMode, setHasUserSetShotStartImageMode] = useState(false);
+  const [renderDurationMode, setRenderDurationMode] = useState("FastPreview");
   const [selectedStep, setSelectedStep] = useState("content");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -284,6 +285,7 @@ export default function ProjectDetailPage() {
         preset: 0,
         maxShots: 1,
         force: true,
+        renderDurationMode,
         useCharacterReferenceInPrompt,
         useShotStartImage
       });
@@ -313,6 +315,7 @@ export default function ProjectDetailPage() {
         force: true,
         useCharacterReferenceInPrompt,
         useShotStartImage,
+        renderDurationMode,
         ...payload
       };
       if (import.meta.env.DEV) {
@@ -322,6 +325,7 @@ export default function ProjectDetailPage() {
           maxShots: requestPayload.maxShots,
           shotIds: requestPayload.shotIds || [],
           useShotStartImage: requestPayload.useShotStartImage,
+          renderDurationMode: requestPayload.renderDurationMode,
           useCharacterReferenceInPrompt: requestPayload.useCharacterReferenceInPrompt
         });
       }
@@ -756,6 +760,7 @@ export default function ProjectDetailPage() {
             jobs={jobs}
             selectedShotIds={selectedShotIds}
             useShotStartImage={useShotStartImage}
+            renderDurationMode={renderDurationMode}
             useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
             hasAnyShotStartImage={hasAnyShotStartImage}
             durationPlanSummary={durationPlanSummary}
@@ -764,6 +769,7 @@ export default function ProjectDetailPage() {
             hasRunningRenderVideo={hasRunningRenderVideo}
             onSelectShot={onSelectStoryboardShot}
             onUseShotStartImageChange={onUseShotStartImageChange}
+            onRenderDurationModeChange={setRenderDurationMode}
             onUseCharacterReferenceChange={setUseCharacterReferenceInPrompt}
             onSaveShotPrompt={onSaveShotPrompt}
             onUploadStartImage={onUploadStartImage}
