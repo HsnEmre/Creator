@@ -35,16 +35,42 @@ ComfyUI is not used anywhere in this pipeline.
    * Dialogue
    * Audio cues
 
-5. `GET /api/projects/{id}/production-plan` reconstructs the saved production plan from SQL Server.
+5. Long-form plans are duration-validated before persistence. Ollama is prompted to create enough short shots, but the API also enforces deterministic guardrails so an undersized LLM response is repaired rather than silently accepted:
 
-6. `POST /api/projects/{id}/preproduction/prepare` creates or refreshes MagicLight-style visual preparation prompts:
+| Target duration | Minimum scenes | Target scenes | Minimum shots | Target shots | Shot duration | Required planned duration |
+| --------------- | -------------: | ------------: | ------------: | -----------: | ------------: | ------------------------: |
+| `180-299s`      |            `8` |       `10-14` |          `24` |      `30-36` |        `5-8s` |        at least `90%` |
+| `300-419s`      |           `12` |       `14-18` |          `40` |      `45-60` |        `5-8s` |        at least `90%` |
+| `420s+`         |           `14` |       `18-24` |          `50` |      `60-84` |        `5-8s` |        at least `85%` |
+
+   For shorter projects below 180 seconds, the previous compact behavior is preserved, but the normalizer avoids absurd 1-scene/1-shot plans unless the story explicitly behaves like a single-shot piece.
+
+6. If the returned plan is too short, the API expands it deterministically by duplicating and varying narrative beats into sequential scenes and shots, clamping long-form shots to `5-8s`, keeping character visual locks, and preserving dialogue from the original scene set. The analyze logs include:
+
+   * `storyboard_duration_validation_started`
+   * `storyboard_duration_validation_failed`
+   * `storyboard_duration_repair_started`
+   * `storyboard_duration_repair_completed`
+   * `storyboard_duration_validation_completed`
+
+7. `GET /api/projects/{id}/production-plan` reconstructs the saved production plan from SQL Server and includes duration-health metadata:
+
+   * `sceneCount`
+   * `shotCount`
+   * `totalPlannedDurationSeconds`
+   * `targetDurationSeconds`
+   * `plannedDurationCoveragePercent`
+   * `isDurationPlanValid`
+   * `durationPlanWarning`
+
+8. `POST /api/projects/{id}/preproduction/prepare` creates or refreshes MagicLight-style visual preparation prompts:
 
    * Character reference image prompts in English
    * Character reference negative prompts
    * Shot start image / keyframe prompts in English
    * Shot start image negative prompts
 
-7. The frontend lets the user review, edit, copy, generate, or manually upload these visual assets before rendering.
+9. The frontend lets the user review, edit, copy, generate, or manually upload these visual assets before rendering.
 
 ---
 
@@ -258,31 +284,48 @@ Do not change quality or offload defaults until diagnostics show the real bottle
    * The API logs the selected render job IDs and shot IDs for traceability.
    * Assembly does not delete old render rows or media files.
 
-37. The Python worker handles `AssembleVideo` by calling FFmpeg concat/stitch and writing:
+37. The assemble job payload includes one segment per selected storyboard shot:
+
+   * source render path
+   * scene index
+   * shot index
+   * shot id
+   * render job id
+   * planned `targetDurationSeconds`
+
+38. The Python worker duration-locks assembly segments before concat. Short source clips are looped/held to the target shot duration, and long source clips are trimmed to the target duration. This preserves the storyboard timing while still using the latest completed render for each shot.
+
+39. The worker logs:
+
+   * `ffmpeg_assembly_selected_shot`
+   * `ffmpeg_assembly_duration_plan`
+   * `ffmpeg_assembly_completed`
+
+40. The Python worker writes the assembled movie to:
 
 ```text
 storage/finals/{projectId}/assembled.mp4
 ```
 
-38. Dialogue lines are persisted and can be queued into `GenerateAudio` jobs for Edge TTS.
+41. Dialogue lines are persisted and can be queued into `GenerateAudio` jobs for Edge TTS.
 
-39. `POST /api/projects/{id}/finalize` prefers `assembled.mp4` when present.
+42. `POST /api/projects/{id}/finalize` prefers `assembled.mp4` when present.
 
-40. If `assembled.mp4` is not present, finalize may fall back to the first completed shot render for development.
+43. If `assembled.mp4` is not present, finalize may fall back to the first completed shot render for development.
 
-41. `POST /api/projects/{id}/finalize` creates a `MuxAudio` job.
+44. `POST /api/projects/{id}/finalize` creates a `MuxAudio` job.
 
-42. `MuxAudio` jobs are executed by FFmpeg in the Python worker and write:
+45. `MuxAudio` jobs are executed by FFmpeg in the Python worker and write:
 
 ```text
 storage/finals/{projectId}/final-preview.mp4
 ```
 
-43. Final audio muxing must preserve input video duration.
+46. Final audio muxing must preserve input video duration.
 
-44. If the audio duration is shorter than the assembled video duration, FFmpeg must pad audio with silence or finalize without trimming the video.
+47. If the audio duration is shorter than the assembled video duration, FFmpeg pads audio with silence so the video is not cut to the audio length.
 
-45. Final output duration must match the input video duration, not the audio duration.
+48. Final output duration must match the input video duration, not the audio duration. Mux logs include the input video duration, audio duration, whether audio is shorter or longer, and the final output duration.
 
 ---
 
@@ -318,6 +361,7 @@ The Storyboard UI shows the latest render state per shot:
 
 * completed render indicator
 * latest render duration when `StartedAt` and `FinishedAt` are available
+* target duration, planned duration, scene count, shot count, and coverage
 * keyframe/Image-to-Video state
 * whether "Animate Missing" will skip already completed shots
 

@@ -794,6 +794,30 @@ body {
   background: rgba(54, 208, 132, 0.09);
 }
 
+.storyboard-duration-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+  background: rgba(8, 13, 20, 0.54);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.storyboard-duration-summary.invalid {
+  border-color: rgba(255, 105, 105, 0.5);
+  background: rgba(255, 105, 105, 0.08);
+}
+
+.storyboard-duration-summary > div {
+  display: grid;
+  gap: 4px;
+}
+
+.storyboard-duration-summary b {
+  font-size: 18px;
+}
+
 .storyboard-editor-layout {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(280px, 360px);

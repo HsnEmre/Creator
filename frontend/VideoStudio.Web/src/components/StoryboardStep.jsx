@@ -258,6 +258,7 @@ function ShotInspector({
   useShotStartImage,
   useCharacterReferenceInPrompt,
   hasAnyShotStartImage,
+  durationPlanSummary,
   isBusy,
   hasRunningRenderVideo,
   onUseShotStartImageChange,
@@ -438,6 +439,7 @@ export default function StoryboardStep({
     [shots, jobsByKey]
   );
   const missingRenderCount = Math.max(0, shots.length - completedShotCount);
+  const summary = durationPlanSummary || {};
 
   if (!plan) {
     return (
@@ -485,6 +487,33 @@ export default function StoryboardStep({
           ? `Animate Missing will skip ${completedShotCount} completed shot(s) and queue ${missingRenderCount} missing shot(s).`
           : "Animate Missing will queue storyboard shots that do not have completed renders yet."}
       </p>
+
+      <section className={`storyboard-duration-summary ${summary.isDurationPlanValid === false ? "invalid" : ""}`}>
+        <div>
+          <span className="muted">Target duration</span>
+          <b>{formatDuration(summary.targetDurationSeconds || 0) || "Not set"}</b>
+        </div>
+        <div>
+          <span className="muted">Planned duration</span>
+          <b>{formatDuration(summary.totalPlannedDurationSeconds || 0) || "0s"}</b>
+        </div>
+        <div>
+          <span className="muted">Scenes</span>
+          <b>{summary.sceneCount ?? shots.reduce((count, shot) => Math.max(count, shot.sceneIndex || 0), 0)}</b>
+        </div>
+        <div>
+          <span className="muted">Shots</span>
+          <b>{summary.shotCount ?? shots.length}</b>
+        </div>
+        <div>
+          <span className="muted">Coverage</span>
+          <b>{summary.plannedDurationCoveragePercent ?? 0}%</b>
+        </div>
+      </section>
+
+      {summary.isDurationPlanValid === false || summary.durationPlanWarning ? (
+        <p className="msg error compact-msg">{summary.durationPlanWarning || "Storyboard is too short for the target duration. Analyze again before rendering the full film."}</p>
+      ) : null}
 
       {!hasAnyShotStartImage ? (
         <p className="msg compact-msg storyboard-keyframe-note">Generate keyframes to control the first frame of each video shot.</p>

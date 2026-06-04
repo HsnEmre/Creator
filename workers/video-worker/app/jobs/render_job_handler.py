@@ -115,12 +115,23 @@ class RenderJobHandler:
             if job_type == "AssembleVideo":
                 if not request.video_path or not request.output_path:
                     raise RuntimeError("AssembleVideo job missing inputVideoPath or outputPath.")
-                video_paths = json.loads(request.video_path) if request.video_path.strip().startswith("[") else [request.video_path]
-                if not video_paths:
+                assembly_inputs = json.loads(request.video_path) if request.video_path.strip().startswith("[") else [request.video_path]
+                if not assembly_inputs:
                     raise RuntimeError("AssembleVideo job has no input videos.")
+                uses_duration_locked_segments = isinstance(assembly_inputs[0], dict)
                 self.api.update_progress(job_id, 10)
-                with timed("video_assembly_duration", job_id=job_id, project_id=request.project_id, video_count=len(video_paths), **cuda_memory_snapshot("before_video_assembly")):
-                    self.ffmpeg.stitch_videos(video_paths, request.output_path)
+                with timed(
+                    "video_assembly_duration",
+                    job_id=job_id,
+                    project_id=request.project_id,
+                    video_count=len(assembly_inputs),
+                    duration_locked_segments=uses_duration_locked_segments,
+                    **cuda_memory_snapshot("before_video_assembly"),
+                ):
+                    if uses_duration_locked_segments:
+                        self.ffmpeg.stitch_video_segments(assembly_inputs, request.output_path)
+                    else:
+                        self.ffmpeg.stitch_videos(assembly_inputs, request.output_path)
                 self.api.update_progress(job_id, 90)
                 self.api.update_progress(job_id, 100)
                 self.api.complete_job(job_id, request.output_path)

@@ -15,7 +15,12 @@ public sealed class OllamaStoryPlanner(
 {
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<StoryResultDto> CreatePlanAsync(string projectTitle, string storyText, int targetDurationSeconds, CancellationToken cancellationToken)
+    public Task<StoryResultDto> CreatePlanAsync(string projectTitle, string storyText, int targetDurationSeconds, CancellationToken cancellationToken)
+    {
+        return CreatePlanAsync(null, projectTitle, storyText, targetDurationSeconds, cancellationToken);
+    }
+
+    public async Task<StoryResultDto> CreatePlanAsync(Guid? projectId, string projectTitle, string storyText, int targetDurationSeconds, CancellationToken cancellationToken)
     {
         await EnsureConfiguredModelExistsAsync(cancellationToken);
 
@@ -23,7 +28,7 @@ public sealed class OllamaStoryPlanner(
         var raw = await ChatAsync(firstPrompt.system, firstPrompt.user, cancellationToken);
         if (jsonService.TryParseProductionPlan(raw, out var plan, out var parseError) && plan is not null)
         {
-            return new StoryResultDto(true, normalizer.Normalize(plan, projectTitle, targetDurationSeconds), null);
+            return new StoryResultDto(true, normalizer.Normalize(plan, projectTitle, targetDurationSeconds, projectId), null);
         }
 
         logger.LogWarning("Ollama returned invalid production plan JSON: {Error}. Response: {Response}", parseError, raw);
@@ -32,7 +37,7 @@ public sealed class OllamaStoryPlanner(
         var corrected = await ChatAsync(firstPrompt.system, correctionPrompt, cancellationToken);
         if (jsonService.TryParseProductionPlan(corrected, out plan, out parseError) && plan is not null)
         {
-            return new StoryResultDto(true, normalizer.Normalize(plan, projectTitle, targetDurationSeconds), null);
+            return new StoryResultDto(true, normalizer.Normalize(plan, projectTitle, targetDurationSeconds, projectId), null);
         }
 
         logger.LogWarning("Ollama correction response was invalid: {Error}. Response: {Response}", parseError, corrected);
@@ -168,6 +173,7 @@ public sealed class OllamaStoryPlanner(
 
     private static (string system, string user) BuildPlanningPrompt(string projectTitle, string storyText, int targetDurationSeconds)
     {
+        var durationGuidance = BuildDurationGuidance(targetDurationSeconds);
         var system = """
 You convert stories into production-ready AI video plans.
 Return ONLY valid JSON.
@@ -177,7 +183,8 @@ No comments.
 No trailing text.
 Do not ask follow-up questions.
 Make a best-effort structured plan from the available story.
-Every shot must be between 3 and 6 seconds.
+For short projects below 180 seconds, shots should usually be between 3 and 6 seconds.
+For long-form projects of 180 seconds or more, every shot must be between 5 and 8 seconds.
 Character visual descriptions must stay consistent across all scenes and shots.
 For every character, keep age, face, hair, clothing, and personality stable.
 Every character must include visualPrompt, voiceStyle, and continuityRules.
@@ -201,13 +208,17 @@ No spoken dialogue belongs in wanPrompt or startImagePrompt.
 Avoid readable text, logos, signs, subtitles, and UI words in image prompts.
 Every negativePrompt must include: low quality, watermark, text, logo, distorted face, inconsistent character, bad hands, extra fingers, extra limbs, flicker, blurry, deformed body.
 The plan must be suitable for long-form video generation.
-If the requested target duration is long, break it into many short shots.
+If the requested target duration is long, break it into many short shots and many scenes.
+Do not return a tiny 1-scene or 3-shot plan for a multi-minute target.
 Wan2.2 is a video model adapter, not an Ollama model.
 """;
 
         var user = $$"""
 Project title: {{projectTitle}}
 Target duration seconds: {{targetDurationSeconds}}
+
+Duration planning requirements:
+{{durationGuidance}}
 
 Story:
 {{storyText}}
@@ -296,5 +307,50 @@ Return exactly one JSON object with this schema:
         builder.AppendLine("Previous response:");
         builder.AppendLine(invalidResponse);
         return builder.ToString();
+    }
+
+    private static string BuildDurationGuidance(int targetDurationSeconds)
+    {
+        if (targetDurationSeconds >= 420)
+        {
+            var minimum = (int)Math.Ceiling(targetDurationSeconds * 0.85);
+            return $"""
+For this long-form target, create at least 14 scenes and at least 50 shots.
+Aim for 18-24 scenes and 60-84 shots.
+Every shot duration must be 5-8 seconds.
+The sum of all shot durations must be at least {minimum} seconds.
+Use many simple one-action shots rather than a few long shots.
+""";
+        }
+
+        if (targetDurationSeconds >= 300)
+        {
+            var minimum = (int)Math.Ceiling(targetDurationSeconds * 0.90);
+            return $"""
+For this long-form target, create at least 12 scenes and at least 40 shots.
+Aim for 14-18 scenes and 45-60 shots.
+Every shot duration must be 5-8 seconds.
+The sum of all shot durations must be at least {minimum} seconds.
+Use many simple one-action shots rather than a few long shots.
+""";
+        }
+
+        if (targetDurationSeconds >= 180)
+        {
+            var minimum = (int)Math.Ceiling(targetDurationSeconds * 0.90);
+            return $"""
+For this long-form target, create at least 8 scenes and at least 24 shots.
+Aim for 10-14 scenes and 30-36 shots.
+Every shot duration must be 5-8 seconds.
+The sum of all shot durations must be at least {minimum} seconds.
+Use many simple one-action shots rather than a few long shots.
+""";
+        }
+
+        return """
+For short targets, keep the plan compact but still create enough scenes and shots to tell the story.
+Avoid a 1-scene/1-shot plan unless the story explicitly asks for a single shot.
+Most shots should be 3-6 seconds.
+""";
     }
 }

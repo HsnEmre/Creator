@@ -164,7 +164,7 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
             })
             .ToList();
 
-        return new ProductionPlanDto(project.Name, project.Logline, project.Genre, project.TargetDurationSeconds, visualStyle, characters, scenes, json.DeserializeList<AudioCueDto>(project.AudioCuesJson));
+        return ProductionPlanNormalizer.WithDurationMetadata(new ProductionPlanDto(project.Name, project.Logline, project.Genre, project.TargetDurationSeconds, visualStyle, characters, scenes, json.DeserializeList<AudioCueDto>(project.AudioCuesJson)));
     }
 }
 

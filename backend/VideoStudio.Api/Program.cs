@@ -173,7 +173,7 @@ app.MapPost("/api/projects/{id:guid}/analyze", async (Guid id, VideoStudioDbCont
     StoryResultDto result;
     try
     {
-        result = await planner.CreatePlanAsync(snapshot.Name, snapshot.StoryText, snapshot.TargetDurationSeconds, cancellationToken);
+        result = await planner.CreatePlanAsync(snapshot.Id, snapshot.Name, snapshot.StoryText, snapshot.TargetDurationSeconds, cancellationToken);
         logger.LogInformation("Ollama planner completed for project {ProjectId}", id);
     }
     catch (Exception ex)
@@ -865,15 +865,28 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
         .Where(j => j.ProjectId == id && j.JobType == RenderJobType.RenderVideo && j.ShotId != null)
         .ToListAsync();
     var latestSuccessfulRenders = LatestCompletedRendersByShot(renderJobs);
-    var selectedRenders = orderedShots
-        .Select(shot => latestSuccessfulRenders.TryGetValue(shot.Id, out var render) ? render : null)
-        .Where(render => render is not null)
-        .Cast<RenderJob>()
+    var selectedShotRenders = orderedShots
+        .Select(shot => latestSuccessfulRenders.TryGetValue(shot.Id, out var render) ? new { Shot = shot, Render = render } : null)
+        .Where(item => item is not null)
+        .Select(item => item!)
         .ToList();
-    var completedShotVideos = selectedRenders
-        .Select(j => j.OutputPath!)
+    var completedShotVideos = selectedShotRenders
+        .Select(item => item.Render.OutputPath!)
         .ToList();
-    var missingShotCount = orderedShots.Count - selectedRenders.Count;
+    var assemblySegments = selectedShotRenders
+        .Select(item => new
+        {
+            videoPath = item.Render.OutputPath,
+            shotId = item.Shot.Id,
+            sceneId = item.Shot.SceneId,
+            sceneIndex = item.Shot.Scene?.Index ?? 0,
+            shotIndex = item.Shot.Index,
+            renderJobId = item.Render.Id,
+            targetDurationSeconds = item.Shot.DurationSeconds
+        })
+        .ToList();
+    var missingShotCount = orderedShots.Count - selectedShotRenders.Count;
+    var totalTargetDurationSeconds = assemblySegments.Sum(segment => Math.Max(0, segment.targetDurationSeconds));
 
     if (completedShotVideos.Count == 0)
     {
@@ -883,8 +896,28 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
     logger.LogInformation(
         "Assembling project {ProjectId} with latest render jobs {RenderJobIds} for shots {ShotIds}. Missing shots: {MissingShotCount}",
         id,
-        selectedRenders.Select(j => j.Id).ToList(),
-        selectedRenders.Select(j => j.ShotId).ToList(),
+        selectedShotRenders.Select(item => item.Render.Id).ToList(),
+        selectedShotRenders.Select(item => item.Shot.Id).ToList(),
+        missingShotCount);
+
+    foreach (var segment in assemblySegments)
+    {
+        logger.LogInformation(
+            "ffmpeg_assembly_selected_shot projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} targetDurationSeconds={TargetDurationSeconds} videoPath={VideoPath}",
+            id,
+            segment.sceneIndex,
+            segment.shotIndex,
+            segment.shotId,
+            segment.renderJobId,
+            segment.targetDurationSeconds,
+            segment.videoPath);
+    }
+
+    logger.LogInformation(
+        "ffmpeg_assembly_duration_plan projectId={ProjectId} videoCount={VideoCount} totalTargetDurationSeconds={TotalTargetDurationSeconds} missingShotCount={MissingShotCount}",
+        id,
+        assemblySegments.Count,
+        totalTargetDurationSeconds,
         missingShotCount);
 
     var job = new RenderJob
@@ -894,7 +927,7 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
         Preset = RenderPreset.FastPreview,
         GenerationMode = VideoGenerationMode.VideoToVideo,
         Prompt = "Assemble completed shot renders into full movie.",
-        InputVideoPath = JsonSerializer.Serialize(completedShotVideos),
+        InputVideoPath = JsonSerializer.Serialize(assemblySegments),
         OutputPath = outputPath,
         Status = RenderJobStatus.Pending
     };
@@ -905,8 +938,9 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
         createdJobId = job.Id,
         videoCount = completedShotVideos.Count,
         missingShotCount,
-        selectedRenderJobIds = selectedRenders.Select(j => j.Id).ToList(),
-        selectedShotIds = selectedRenders.Select(j => j.ShotId).ToList(),
+        totalTargetDurationSeconds,
+        selectedRenderJobIds = selectedShotRenders.Select(item => item.Render.Id).ToList(),
+        selectedShotIds = selectedShotRenders.Select(item => item.Shot.Id).ToList(),
         localPath = outputPath,
         mediaUrl = TryBuildMediaUrl(outputPath, "finals", id)
     });

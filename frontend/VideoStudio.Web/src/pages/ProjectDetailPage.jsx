@@ -612,6 +612,22 @@ export default function ProjectDetailPage() {
   const characterCount = visualPlan?.characters?.length ?? 0;
   const sceneCount = visualPlan?.scenes?.length ?? 0;
   const shotCount = visualPlan?.scenes?.reduce((count, scene) => count + (scene.shots?.length ?? 0), 0) ?? 0;
+  const computedPlannedDurationSeconds = visualPlan?.scenes?.reduce(
+    (count, scene) => count + (scene.shots?.reduce((shotTotal, shot) => shotTotal + Number(shot.durationSeconds || shot.targetDurationSeconds || 0), 0) ?? 0),
+    0
+  ) ?? 0;
+  const targetDurationSeconds = visualPlan?.targetDurationSeconds || project.targetDurationSeconds || 60;
+  const durationPlanSummary = {
+    targetDurationSeconds,
+    totalPlannedDurationSeconds: visualPlan?.totalPlannedDurationSeconds ?? computedPlannedDurationSeconds,
+    sceneCount: visualPlan?.sceneCount ?? sceneCount,
+    shotCount: visualPlan?.shotCount ?? shotCount,
+    plannedDurationCoveragePercent:
+      visualPlan?.plannedDurationCoveragePercent ??
+      (targetDurationSeconds > 0 ? Math.round((computedPlannedDurationSeconds / targetDurationSeconds) * 100) : 0),
+    isDurationPlanValid: visualPlan?.isDurationPlanValid ?? true,
+    durationPlanWarning: visualPlan?.durationPlanWarning || ""
+  };
   const completedRenderCount = completedJobs.filter((job) => job.jobTypeName === "RenderVideo").length;
   const completedAudioCount = dialogueLines.filter((line) => line.audioUrl || line.audioPath).length;
   const hasAssembly = completedJobs.some((job) => job.jobTypeName === "AssembleVideo") || Boolean(finalVideo?.assembledMediaUrl);
@@ -726,6 +742,7 @@ export default function ProjectDetailPage() {
             useShotStartImage={useShotStartImage}
             useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
             hasAnyShotStartImage={hasAnyShotStartImage}
+            durationPlanSummary={durationPlanSummary}
             isBusy={Boolean(busyAction)}
             hasRunningRenderVideo={hasRunningRenderVideo}
             onSelectShot={onSelectStoryboardShot}

@@ -32,7 +32,15 @@ public sealed record ProductionPlanDto(
     VisualStyleDto VisualStyle,
     List<CharacterPlanDto> Characters,
     List<ScenePlanDto> Scenes,
-    List<AudioCueDto> AudioCues);
+    List<AudioCueDto> AudioCues)
+{
+    public int SceneCount { get; init; }
+    public int ShotCount { get; init; }
+    public int TotalPlannedDurationSeconds { get; init; }
+    public int PlannedDurationCoveragePercent { get; init; }
+    public bool IsDurationPlanValid { get; init; }
+    public string? DurationPlanWarning { get; init; }
+};
 
 public sealed record VisualStyleDto(string StylePrompt, string NegativePrompt, string CameraStyle, string LightingStyle, string ColorPalette);
 
