@@ -101,6 +101,15 @@ class Wan22TI2VAdapter:
             self._persistent_client.close()
             self._persistent_client = None
 
+    def prewarm(self) -> None:
+        if not self.settings.wan22_persistent_pipeline:
+            logging.warning("WAN22_PREWARM_ON_START requested but WAN22_PERSISTENT_PIPELINE is disabled.")
+            return
+        if self.settings.placeholder_outputs or not self._wan_generate_exists():
+            logging.warning("WAN22_PREWARM_ON_START skipped because Wan2.2 is unavailable or placeholder outputs are enabled.")
+            return
+        self._persistent().prewarm()
+
     def _persistent(self) -> Wan22PersistentClient:
         if self._persistent_client is None:
             self._persistent_client = Wan22PersistentClient(self.settings)

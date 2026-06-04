@@ -407,34 +407,54 @@ app.MapGet("/api/projects/{id:guid}/shots", async (Guid id, VideoStudioDbContext
         return Results.NotFound();
     }
 
-    var shots = await db.Shots
+    var renderJobs = await db.RenderJobs
+        .Where(j => j.ProjectId == id && j.JobType == RenderJobType.RenderVideo && j.ShotId != null)
+        .ToListAsync();
+    var latestSuccessfulRenders = LatestCompletedRendersByShot(renderJobs);
+
+    var shotEntities = await db.Shots
         .Where(s => s.ProjectId == id)
         .Include(s => s.Scene)
         .OrderBy(s => s.Scene!.Index)
         .ThenBy(s => s.Index)
-        .Select(s => new
-        {
-            id = s.Id,
-            projectId = s.ProjectId,
-            sceneId = s.SceneId,
-            sceneIndex = s.Scene != null ? s.Scene.Index : 0,
-            shotIndex = s.Index,
-            title = s.ShotType,
-            description = s.Action,
-            visualPrompt = s.Prompt,
-            negativePrompt = s.NegativePrompt,
-            cameraDirection = s.ShotType,
-            motionDirection = s.CameraMotion,
-            targetDurationSeconds = s.DurationSeconds,
-            continuityNotes = s.ContinuityNotes,
-            startImagePrompt = s.StartImagePrompt,
-            startImageNegativePrompt = s.StartImageNegativePrompt,
-            startImageStatus = s.StartImageStatus,
-            startImagePath = s.StartImagePath,
-            startImageUrl = s.StartImageUrl,
-            outputPath = s.OutputPath
-        })
         .ToListAsync();
+
+    var shots = shotEntities
+        .Select(s =>
+        {
+            latestSuccessfulRenders.TryGetValue(s.Id, out var latestRender);
+            return new
+            {
+                id = s.Id,
+                projectId = s.ProjectId,
+                sceneId = s.SceneId,
+                sceneIndex = s.Scene != null ? s.Scene.Index : 0,
+                shotIndex = s.Index,
+                title = s.ShotType,
+                description = s.Action,
+                visualPrompt = s.Prompt,
+                negativePrompt = s.NegativePrompt,
+                cameraDirection = s.ShotType,
+                motionDirection = s.CameraMotion,
+                targetDurationSeconds = s.DurationSeconds,
+                continuityNotes = s.ContinuityNotes,
+                startImagePrompt = s.StartImagePrompt,
+                startImageNegativePrompt = s.StartImageNegativePrompt,
+                startImageStatus = s.StartImageStatus,
+                startImagePath = s.StartImagePath,
+                startImageUrl = s.StartImageUrl,
+                outputPath = latestRender?.OutputPath ?? s.OutputPath,
+                latestRenderJobId = latestRender?.Id,
+                latestRenderStatus = latestRender?.Status,
+                latestRenderStatusName = latestRender?.Status.ToString(),
+                latestRenderDurationSeconds = RenderDurationSeconds(latestRender),
+                latestRenderOutputPath = latestRender?.OutputPath,
+                latestRenderOutputUrl = TryBuildMediaUrl(latestRender?.OutputPath, "renders", id),
+                latestRenderStartedAt = latestRender?.StartedAt,
+                latestRenderFinishedAt = latestRender?.FinishedAt
+            };
+        })
+        .ToList();
 
     return Results.Ok(shots);
 });
@@ -576,7 +596,9 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
     var settings = GetPresetSettings(preset);
     var hasExplicitTarget = request?.ShotIds?.Count > 0 || request?.SceneIndex is not null || request?.ShotIndex is not null;
     var limitedShots = hasExplicitTarget ? shots : shots.Take(maxShots).ToList();
+    var latestSuccessfulRenders = LatestCompletedRendersByShot(project.RenderJobs);
     var queuedShotDtos = new List<RenderQueuedShotDto>();
+    var skippedShotDtos = new List<RenderQueuedShotDto>();
     var jobs = new List<RenderJob>();
     foreach (var shot in limitedShots)
     {
@@ -585,6 +607,13 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             var hasExisting = project.RenderJobs.Any(j => j.ShotId == shot.Id && (j.Status == RenderJobStatus.Pending || j.Status == RenderJobStatus.Rendering));
             if (hasExisting)
             {
+                skippedShotDtos.Add(new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index));
+                continue;
+            }
+
+            if (latestSuccessfulRenders.ContainsKey(shot.Id))
+            {
+                skippedShotDtos.Add(new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index));
                 continue;
             }
         }
@@ -619,11 +648,12 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
 
     if (jobs.Count == 0)
     {
-        return Results.Ok(new RenderQueuedDto(project.Id, 0, preset, maxShots, queuedShotDtos));
+        return Results.Ok(new RenderQueuedDto(project.Id, 0, preset, maxShots, queuedShotDtos, skippedShotDtos.Count, skippedShotDtos));
     }
 
     db.RenderJobs.AddRange(jobs);
-    foreach (var shot in limitedShots)
+    var queuedShotIds = jobs.Where(j => j.ShotId is not null).Select(j => j.ShotId!.Value).ToHashSet();
+    foreach (var shot in limitedShots.Where(shot => queuedShotIds.Contains(shot.Id)))
     {
         shot.Status = ShotStatus.Queued;
     }
@@ -631,7 +661,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
     project.UpdatedAt = DateTimeOffset.UtcNow;
     await db.SaveChangesAsync();
 
-    return Results.Accepted($"/api/projects/{id}/render-status", new RenderQueuedDto(project.Id, jobs.Count, preset, maxShots, queuedShotDtos));
+    return Results.Accepted($"/api/projects/{id}/render-status", new RenderQueuedDto(project.Id, jobs.Count, preset, maxShots, queuedShotDtos, skippedShotDtos.Count, skippedShotDtos));
 });
 
 app.MapPost("/api/projects/{id:guid}/audio/generate", async (Guid id, GenerateAudioRequest request, VideoStudioDbContext db) =>
@@ -801,7 +831,7 @@ app.MapPost("/api/projects/{id:guid}/visuals/generate-shot-start-images", async 
     return Results.Accepted($"/api/projects/{id}/render-jobs", new { createdJobs = jobs.Count, jobIds = jobs.Select(j => j.Id).ToList() });
 });
 
-app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest? request, VideoStudioDbContext db) =>
+app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest? request, VideoStudioDbContext db, ILogger<Program> logger) =>
 {
     var project = await db.Projects.Include(p => p.RenderJobs).FirstOrDefaultAsync(p => p.Id == id);
     if (project is null)
@@ -825,19 +855,37 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
         return Results.Ok(new { createdJobId = existingActiveJob.Id, reusedExistingJob = true, localPath = existingActiveJob.OutputPath, mediaUrl = TryBuildMediaUrl(existingActiveJob.OutputPath, "finals", id) });
     }
 
-    var completedShotVideos = await db.RenderJobs
-        .Where(j => j.ProjectId == id && j.JobType == RenderJobType.RenderVideo && j.Status == RenderJobStatus.Completed && !string.IsNullOrWhiteSpace(j.OutputPath))
-        .Include(j => j.Scene)
-        .Include(j => j.Shot)
-        .OrderBy(j => j.Scene != null ? j.Scene.Index : int.MaxValue)
-        .ThenBy(j => j.Shot != null ? j.Shot.Index : int.MaxValue)
-        .Select(j => j.OutputPath!)
+    var orderedShots = await db.Shots
+        .Where(s => s.ProjectId == id)
+        .Include(s => s.Scene)
+        .OrderBy(s => s.Scene != null ? s.Scene.Index : int.MaxValue)
+        .ThenBy(s => s.Index)
         .ToListAsync();
+    var renderJobs = await db.RenderJobs
+        .Where(j => j.ProjectId == id && j.JobType == RenderJobType.RenderVideo && j.ShotId != null)
+        .ToListAsync();
+    var latestSuccessfulRenders = LatestCompletedRendersByShot(renderJobs);
+    var selectedRenders = orderedShots
+        .Select(shot => latestSuccessfulRenders.TryGetValue(shot.Id, out var render) ? render : null)
+        .Where(render => render is not null)
+        .Cast<RenderJob>()
+        .ToList();
+    var completedShotVideos = selectedRenders
+        .Select(j => j.OutputPath!)
+        .ToList();
+    var missingShotCount = orderedShots.Count - selectedRenders.Count;
 
     if (completedShotVideos.Count == 0)
     {
         return Results.BadRequest("No completed shot videos are available to assemble.");
     }
+
+    logger.LogInformation(
+        "Assembling project {ProjectId} with latest render jobs {RenderJobIds} for shots {ShotIds}. Missing shots: {MissingShotCount}",
+        id,
+        selectedRenders.Select(j => j.Id).ToList(),
+        selectedRenders.Select(j => j.ShotId).ToList(),
+        missingShotCount);
 
     var job = new RenderJob
     {
@@ -852,7 +900,16 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
     };
     db.RenderJobs.Add(job);
     await db.SaveChangesAsync();
-    return Results.Accepted($"/api/projects/{id}/render-jobs", new { createdJobId = job.Id, videoCount = completedShotVideos.Count, localPath = outputPath, mediaUrl = TryBuildMediaUrl(outputPath, "finals", id) });
+    return Results.Accepted($"/api/projects/{id}/render-jobs", new
+    {
+        createdJobId = job.Id,
+        videoCount = completedShotVideos.Count,
+        missingShotCount,
+        selectedRenderJobIds = selectedRenders.Select(j => j.Id).ToList(),
+        selectedShotIds = selectedRenders.Select(j => j.ShotId).ToList(),
+        localPath = outputPath,
+        mediaUrl = TryBuildMediaUrl(outputPath, "finals", id)
+    });
 });
 
 app.MapPost("/api/projects/{id:guid}/finalize", async (Guid id, FinalizeRequest? request, VideoStudioDbContext db) =>
@@ -956,6 +1013,10 @@ app.MapGet("/api/projects/{id:guid}/render-jobs", async (Guid id, VideoStudioDbC
         .Include(j => j.Shot)
         .OrderByDescending(j => j.CreatedAt)
         .ToListAsync();
+    var latestSuccessfulRenderIds = LatestCompletedRendersByShot(jobEntities)
+        .Values
+        .Select(j => j.Id)
+        .ToHashSet();
     var jobs = jobEntities
         .Select(j => new ProjectRenderJobDetailsDto(
             j.Id,
@@ -975,7 +1036,9 @@ app.MapGet("/api/projects/{id:guid}/render-jobs", async (Guid id, VideoStudioDbC
             j.ErrorMessage,
             j.CreatedAt,
             j.StartedAt,
-            j.FinishedAt))
+            j.FinishedAt,
+            RenderDurationSeconds(j),
+            latestSuccessfulRenderIds.Contains(j.Id)))
         .ToList();
 
     return Results.Ok(jobs);
@@ -1529,7 +1592,45 @@ static ProjectSummaryDto ToSummary(Project project) => new(project.Id, project.N
 
 static ProjectDetailsDto ToDetails(Project project) => new(project.Id, project.Name, project.StoryText, project.TargetDurationSeconds, project.Status, project.Logline, project.Genre, project.CreatedAt, project.UpdatedAt);
 
-static RenderJobDto ToRenderJobDto(RenderJob job) => new(job.Id, job.ProjectId, job.SceneId, job.ShotId, job.CharacterId, job.DialogueLineId, job.JobType, job.Preset, job.GenerationMode, job.GenerationMode.ToString(), job.Prompt, job.CompiledPrompt, job.NegativePrompt, job.Size, job.FrameNum, job.SampleSteps, job.Seed, job.InputImagePath, TryBuildMediaUrl(job.InputImagePath, "assets", job.ProjectId), job.InputVideoPath, job.InputAudioPath, job.TextContent, job.Speaker, job.Emotion, job.Language, job.Voice, job.OutputPath, job.Status, job.Progress, job.ErrorMessage);
+static RenderJobDto ToRenderJobDto(RenderJob job) => new(job.Id, job.ProjectId, job.SceneId, job.ShotId, job.CharacterId, job.DialogueLineId, job.JobType, job.Preset, job.GenerationMode, job.GenerationMode.ToString(), job.Prompt, job.CompiledPrompt, job.NegativePrompt, job.Size, job.FrameNum, job.SampleSteps, job.Seed, job.InputImagePath, TryBuildMediaUrl(job.InputImagePath, "assets", job.ProjectId), job.InputVideoPath, job.InputAudioPath, job.TextContent, job.Speaker, job.Emotion, job.Language, job.Voice, job.OutputPath, job.Status, job.Progress, job.ErrorMessage, job.CreatedAt, job.StartedAt, job.FinishedAt, RenderDurationSeconds(job));
+
+static Dictionary<Guid, RenderJob> LatestCompletedRendersByShot(IEnumerable<RenderJob> jobs)
+{
+    return jobs
+        .Where(j => j.JobType == RenderJobType.RenderVideo
+            && j.ShotId is not null
+            && j.Status == RenderJobStatus.Completed
+            && HasValidOutputPath(j.OutputPath))
+        .GroupBy(j => j.ShotId!.Value)
+        .ToDictionary(
+            g => g.Key,
+            g => g
+                .OrderByDescending(RenderSortTimestamp)
+                .ThenByDescending(j => j.CreatedAt)
+                .First());
+}
+
+static DateTimeOffset RenderSortTimestamp(RenderJob job) => job.FinishedAt ?? job.CreatedAt;
+
+static bool HasValidOutputPath(string? outputPath)
+{
+    if (string.IsNullOrWhiteSpace(outputPath))
+    {
+        return false;
+    }
+
+    return !Path.IsPathFullyQualified(outputPath) || File.Exists(outputPath);
+}
+
+static double? RenderDurationSeconds(RenderJob? job)
+{
+    if (job?.StartedAt is not DateTimeOffset startedAt || job.FinishedAt is not DateTimeOffset finishedAt)
+    {
+        return null;
+    }
+
+    return Math.Round(Math.Max(0, (finishedAt - startedAt).TotalSeconds), 1);
+}
 
 static Task<int> MarkProjectStatusAsync(VideoStudioDbContext db, Guid projectId, ProjectStatus status, CancellationToken cancellationToken)
 {

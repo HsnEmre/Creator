@@ -328,7 +328,8 @@ export default function ProjectDetailPage() {
       const result = await renderProject(projectId, requestPayload);
       await loadJobs();
       const warning = requestPayload.useShotStartImage && !hasAnyShotStartImage ? " No shot start image found. Render will use Text-to-Video." : "";
-      setMessage(`${label}: queued ${result?.queuedJobs ?? 0} render job(s).${warning}`);
+      const skipped = result?.skippedShots ? ` Skipped ${result.skippedShots} already queued/running or completed shot(s).` : "";
+      setMessage(`${label}: queued ${result?.queuedJobs ?? 0} render job(s).${skipped}${warning}`);
     });
   }
 
@@ -363,6 +364,7 @@ export default function ProjectDetailPage() {
       {
         shotIds: [shot.id],
         maxShots: 1,
+        force: true,
         useShotStartImage: effectiveUseShotStartImage
       },
       "Selected shot"
@@ -388,6 +390,28 @@ export default function ProjectDetailPage() {
         useShotStartImage: effectiveUseShotStartImage
       },
       "All shots"
+    );
+  }
+
+  function onRegenerateStoryboardAll() {
+    const shotIds = storyboardShots.map((shot) => shot.id).filter(Boolean);
+    if (!shotIds.length) {
+      setError("No storyboard shots are available to regenerate.");
+      return undefined;
+    }
+    const shotsWithKeyframes = storyboardShots.filter(hasShotStartImage).length;
+    const effectiveUseShotStartImage = shotsWithKeyframes > 0 || useShotStartImage;
+    if (hasAnyShotStartImage && !useShotStartImage) {
+      setUseShotStartImage(true);
+    }
+    return renderWithPayload(
+      {
+        shotIds,
+        maxShots: shotIds.length,
+        force: true,
+        useShotStartImage: effectiveUseShotStartImage
+      },
+      "Regenerate all shots"
     );
   }
 
@@ -713,6 +737,7 @@ export default function ProjectDetailPage() {
             onGenerateShotStartImage={onGenerateShotStartImage}
             onAnimateSelected={onRenderStoryboardSelected}
             onAnimateAll={onRenderStoryboardAll}
+            onRegenerateAll={onRegenerateStoryboardAll}
           />
         ) : null}
 

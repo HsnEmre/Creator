@@ -4,6 +4,7 @@ from typing import Optional
 
 from app.config import Settings
 from app.jobs.render_job_handler import RenderJobHandler
+from app.services.performance_diagnostics import elapsed_seconds, log_perf, now
 from app.services.api_client import ApiClient
 
 
@@ -16,6 +17,7 @@ class QueueWorker:
         self.api = ApiClient(self.settings.api_base_url)
         self.handler = RenderJobHandler(self.api, self.settings)
         self._log_configuration()
+        self._prewarm_wan_if_requested()
 
     def run(self) -> None:
         logging.info("Video worker polling %s", self.settings.api_base_url)
@@ -47,6 +49,7 @@ class QueueWorker:
         logging.info("WAN22_VAE_DTYPE=%s", self.settings.wan22_vae_dtype or "(default)")
         logging.info("WAN22_TORCH_OPTIMIZE=%s", self.settings.wan22_torch_optimize)
         logging.info("WAN22_PERSISTENT_PIPELINE=%s", self.settings.wan22_persistent_pipeline)
+        logging.info("WAN22_PREWARM_ON_START=%s", self.settings.wan22_prewarm_on_start)
         logging.info("VIDEOSTUDIO_PLACEHOLDER_OUTPUTS=%s", self.settings.placeholder_outputs)
         logging.info("IMAGE_MODEL_PROVIDER=%s", self.settings.image_model_provider)
         logging.info("SDXL_MODEL_PATH=%s", self.settings.sdxl_model_path)
@@ -56,3 +59,24 @@ class QueueWorker:
         logging.info("SDXL_UNLOAD_AFTER_JOB=%s", self.settings.sdxl_unload_after_job)
         logging.info("IMAGE_OUTPUT_DIR=%s", self.settings.image_output_dir)
         logging.info("VIDEO_WORKER_PERF_LOG=%s", self.settings.performance_diagnostics)
+
+    def _prewarm_wan_if_requested(self) -> None:
+        if not self.settings.wan22_prewarm_on_start:
+            return
+
+        start = now()
+        log_perf(
+            "wan_prewarm_started",
+            persistent_pipeline=self.settings.wan22_persistent_pipeline,
+            prewarm_mode="persistent_server_health",
+            loads_pipeline=False,
+        )
+        try:
+            prewarm = getattr(self.handler.ti2v, "prewarm", None)
+            if callable(prewarm):
+                prewarm()
+            else:
+                logging.warning("WAN22_PREWARM_ON_START requested but TI2V adapter has no prewarm hook.")
+        except Exception:
+            logging.warning("Wan2.2 prewarm failed; normal render startup will retry later.", exc_info=True)
+            log_perf("wan_prewarm_failed", duration_seconds=elapsed_seconds(start))

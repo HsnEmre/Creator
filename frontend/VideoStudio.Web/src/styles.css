@@ -789,6 +789,11 @@ body {
   background: rgba(255, 199, 95, 0.1);
 }
 
+.storyboard-render-reuse-note {
+  border: 1px solid rgba(54, 208, 132, 0.3);
+  background: rgba(54, 208, 132, 0.09);
+}
+
 .storyboard-editor-layout {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(280px, 360px);
@@ -857,6 +862,10 @@ body {
 .storyboard-shot-meta small {
   color: var(--muted);
   line-height: 1.25;
+}
+
+.storyboard-render-meta {
+  color: #c8e3ff !important;
 }
 
 .storyboard-preview-panel {

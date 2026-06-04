@@ -113,6 +113,8 @@ Future provider names such as `FLUX_DEV`, `FLUX_KONTEXT`, and `HIDREAM` are rese
 * one shot
 * broader project-wide queues
 
+When `force=false` or omitted, render creation skips shots that already have an active `Pending`/`Rendering` video job or a latest successful completed render with a valid output path. This makes Storyboard "Animate Missing" safe for repeated local testing. Use `force=true` only when intentionally regenerating a selected shot or all shots.
+
 16. Scene and shot metadata can be edited after analysis. Scene order is read by `sceneIndex`; shot order is read by `shotIndex`.
 
 ---
@@ -194,6 +196,7 @@ Optional runtime switches are available for local A/B testing. Leave them unset 
 | ------- | ------- | ------- |
 | `WAN22_TORCH_OPTIMIZE=true` | `false` | Passes `WAN_TORCH_OPTIMIZE=1` to Wan2.2 so `generate.py` enables TF32 matmul, cuDNN TF32, cuDNN benchmark, and high float32 matmul precision when supported. |
 | `WAN22_PERSISTENT_PIPELINE=true` | `false` | Uses an optional long-lived Wan2.2 TI2V subprocess so compatible renders can reuse the loaded T5/VAE/DiT pipeline. |
+| `WAN22_PREWARM_ON_START=true` | `false` | Starts the persistent Wan subprocess at worker startup and performs a health check without running inference. It is useful for surfacing warm-server startup problems early, but the first actual render may still pay the full model load cost. |
 | `SDXL_UNLOAD_AFTER_JOB=true` | `false` | Releases the cached SDXL pipeline after character reference or shot start image jobs, then runs garbage collection and CUDA cache cleanup. This can reduce RAM/VRAM pressure before Wan2.2 jobs at the cost of reloading SDXL for the next image job. |
 | `WAN22_VAE_DTYPE=fp16` / `bf16` / `fp32` | unset | Experimental VAE dtype override. Leave unset for Wan2.2 default behavior. |
 | `WAN22_DEFAULT_OFFLOAD_MODEL=false` | `true` | Risky memory/performance test. Keeping more model state on GPU can reduce transfer overhead but may OOM on 16GB VRAM. |
@@ -249,7 +252,11 @@ Do not change quality or offload defaults until diagnostics show the real bottle
 
 35. `POST /api/projects/{id}/assemble` creates an `AssembleVideo` job.
 
-36. The API collects completed shot render outputs and orders them by scene index, then shot index.
+36. The API selects exactly one latest valid completed render for each storyboard shot, then orders those selected renders by scene index and shot index. Historical test renders remain in the database and on disk, but they are not assembled when a newer completed render exists for the same shot.
+
+   * Missing shots are skipped and reported in the assemble response.
+   * The API logs the selected render job IDs and shot IDs for traceability.
+   * Assembly does not delete old render rows or media files.
 
 37. The Python worker handles `AssembleVideo` by calling FFmpeg concat/stitch and writing:
 
@@ -304,6 +311,19 @@ MagicLight-style staging means the user can pause between story analysis and ren
 7. Finalize the movie.
 
 This does not use a node workflow system.
+
+### Storyboard Render Observability
+
+The Storyboard UI shows the latest render state per shot:
+
+* completed render indicator
+* latest render duration when `StartedAt` and `FinishedAt` are available
+* keyframe/Image-to-Video state
+* whether "Animate Missing" will skip already completed shots
+
+"Animate Selected" is the explicit regeneration path for the selected shot. "Animate Missing" sends all storyboard shot IDs with `force=false`, allowing the backend to skip completed or already-active shots. "Regenerate All" sends the same shot IDs with `force=true` for intentional full rerenders.
+
+VAE decode remains the dominant runtime bottleneck for Wan2.2 renders. The render reuse and assembly selection rules reduce unnecessary work, but they do not optimize VAE decode.
 
 ---
 

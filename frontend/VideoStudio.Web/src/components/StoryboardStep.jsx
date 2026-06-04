@@ -19,6 +19,10 @@ function isCompletedJob(job) {
   return String(statusLabel(job?.status)).toLowerCase() === "completed";
 }
 
+function isRenderVideoJob(job) {
+  return job?.jobTypeName === "RenderVideo" || job?.jobType === "RenderVideo";
+}
+
 function compactText(value, maxLength = 180) {
   if (!value) return "";
   const normalized = String(value).replace(/\s+/g, " ").trim();
@@ -39,10 +43,29 @@ function getShotStartUrl(shot) {
   return shot?.startImageUrl ? toAbsoluteApiUrl(shot.startImageUrl) : "";
 }
 
+function getJobTime(job) {
+  return new Date(job?.finishedAt || job?.createdAt || 0).getTime();
+}
+
+function getLatestCompletedRender(jobs) {
+  return (jobs || [])
+    .filter((job) => isRenderVideoJob(job) && isCompletedJob(job) && (job.outputUrl || job.outputPath))
+    .sort((a, b) => getJobTime(b) - getJobTime(a))[0] || null;
+}
+
+function formatDuration(seconds) {
+  if (seconds === undefined || seconds === null || Number.isNaN(Number(seconds))) return "";
+  const value = Number(seconds);
+  if (value < 60) return `${value.toFixed(value >= 10 ? 0 : 1)}s`;
+  const minutes = Math.floor(value / 60);
+  const remainder = Math.round(value % 60);
+  return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+}
+
 function getShotStatus(shot, jobs) {
-  const renderJob = jobs.find((job) => job.jobTypeName === "RenderVideo" && isCompletedJob(job));
+  const renderJob = getLatestCompletedRender(jobs);
   if (renderJob) return "Rendered";
-  const runningRender = jobs.find((job) => job.jobTypeName === "RenderVideo" && isRunningJob(job));
+  const runningRender = jobs.find((job) => isRenderVideoJob(job) && isRunningJob(job));
   if (runningRender) return "Rendering";
   const runningKeyframe = jobs.find((job) => job.jobTypeName === "GenerateShotStartImage" && isRunningJob(job));
   if (runningKeyframe) return "Keyframe queued";
@@ -99,7 +122,9 @@ function ShotRail({ shots, selectedShotId, jobsByKey, onSelectShot }) {
       <div className="storyboard-shot-rail-list">
         {shots.map((shot) => {
           const key = getShotKey(shot);
-          const status = getShotStatus(shot, jobsByKey.get(key) || []);
+          const shotJobs = jobsByKey.get(key) || [];
+          const latestRender = getLatestCompletedRender(shotJobs);
+          const status = getShotStatus(shot, shotJobs);
           const isSelected = selectedShotId === shot.id;
           const startUrl = getShotStartUrl(shot);
           return (
@@ -116,6 +141,11 @@ function ShotRail({ shots, selectedShotId, jobsByKey, onSelectShot }) {
                 <b>Scene {shot.sceneIndex} / Shot {shot.index}</b>
                 <small>{compactText(shot.action || shot.shotType || shot.sceneTitle || "Planned shot", 64)}</small>
                 <span className={`badge ${getStatusClass(status)}`}>{status}</span>
+                {latestRender ? (
+                  <small className="storyboard-render-meta">
+                    Latest render {formatDuration(latestRender.durationSeconds) || "ready"}
+                  </small>
+                ) : null}
               </span>
             </button>
           );
@@ -127,7 +157,7 @@ function ShotRail({ shots, selectedShotId, jobsByKey, onSelectShot }) {
 
 function ShotPreview({ shot, jobs, onUploadStartImage }) {
   const startUrl = getShotStartUrl(shot);
-  const latestRender = jobs.find((job) => job.jobTypeName === "RenderVideo" && isCompletedJob(job));
+  const latestRender = getLatestCompletedRender(jobs);
   const latestKeyframeJob = jobs.find((job) => job.jobTypeName === "GenerateShotStartImage");
 
   if (!shot) {
@@ -212,6 +242,7 @@ function ShotPreview({ shot, jobs, onUploadStartImage }) {
         {latestRender ? (
           <p>
             Render: <a href={latestRender.outputUrl ? toAbsoluteApiUrl(latestRender.outputUrl) : undefined} target="_blank" rel="noreferrer">Completed video</a>
+            {latestRender.durationSeconds ? <span className="muted"> ({formatDuration(latestRender.durationSeconds)})</span> : null}
           </p>
         ) : (
           <p className="muted">No completed render for this shot yet.</p>
@@ -234,7 +265,8 @@ function ShotInspector({
   onSaveShotPrompt,
   onGenerateShotStartImage,
   onAnimateSelected,
-  onAnimateAll
+  onAnimateAll,
+  onRegenerateAll
 }) {
   const [draft, setDraft] = useState({ startImagePrompt: "", startImageNegativePrompt: "" });
 
@@ -256,7 +288,7 @@ function ShotInspector({
   }
 
   const runningJob = jobs.find(isRunningJob);
-  const completedRender = jobs.find((job) => job.jobTypeName === "RenderVideo" && isCompletedJob(job));
+  const completedRender = getLatestCompletedRender(jobs);
   const hasKeyframe = Boolean(shot.startImageUrl || shot.startImagePath);
   const characters = shot.requiredCharacters || shot.sceneRequiredCharacters || [];
 
@@ -341,15 +373,26 @@ function ShotInspector({
             Animate Selected
           </button>
           <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onAnimateAll}>
-            Animate All Shots
+            Animate Missing Shots
           </button>
+          {onRegenerateAll ? (
+            <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onRegenerateAll}>
+              Regenerate All
+            </button>
+          ) : null}
+          <small className="muted">Animate Missing skips shots with completed renders. Regenerate All queues every shot again.</small>
         </div>
       </div>
 
       <div className="storyboard-inspector-section">
         <h3>Job Status</h3>
         {runningJob ? <p>Current: <span className="badge badge-rendering">{statusLabel(runningJob.status)}</span></p> : null}
-        {completedRender ? <p>Rendered: <span className="badge badge-completed">Ready</span></p> : null}
+        {completedRender ? (
+          <p>
+            Rendered: <span className="badge badge-completed">Ready</span>
+            {completedRender.durationSeconds ? <span className="muted"> {formatDuration(completedRender.durationSeconds)}</span> : null}
+          </p>
+        ) : null}
         {!runningJob && !completedRender ? <p className="muted">No render job for this shot yet.</p> : null}
       </div>
     </aside>
@@ -373,7 +416,8 @@ export default function StoryboardStep({
   onGenerateShotStartImages,
   onGenerateShotStartImage,
   onAnimateSelected,
-  onAnimateAll
+  onAnimateAll,
+  onRegenerateAll
 }) {
   const shots = useMemo(() => normalizePlanShots(plan), [plan]);
   const selectedShotId = selectedShotIds[0] || shots[0]?.id || null;
@@ -389,6 +433,11 @@ export default function StoryboardStep({
     return map;
   }, [jobs]);
   const selectedJobs = selectedShotJobs(selectedShot, jobs || []);
+  const completedShotCount = useMemo(
+    () => shots.filter((shot) => getLatestCompletedRender(jobsByKey.get(getShotKey(shot)) || [])).length,
+    [shots, jobsByKey]
+  );
+  const missingRenderCount = Math.max(0, shots.length - completedShotCount);
 
   if (!plan) {
     return (
@@ -421,10 +470,21 @@ export default function StoryboardStep({
             Generate Keyframes
           </button>
           <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onAnimateAll}>
-            Animate All
+            Animate Missing
           </button>
+          {onRegenerateAll ? (
+            <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onRegenerateAll}>
+              Regenerate All
+            </button>
+          ) : null}
         </div>
       </section>
+
+      <p className="msg compact-msg storyboard-render-reuse-note">
+        {completedShotCount > 0
+          ? `Animate Missing will skip ${completedShotCount} completed shot(s) and queue ${missingRenderCount} missing shot(s).`
+          : "Animate Missing will queue storyboard shots that do not have completed renders yet."}
+      </p>
 
       {!hasAnyShotStartImage ? (
         <p className="msg compact-msg storyboard-keyframe-note">Generate keyframes to control the first frame of each video shot.</p>
@@ -447,6 +507,7 @@ export default function StoryboardStep({
           onGenerateShotStartImage={onGenerateShotStartImage}
           onAnimateSelected={onAnimateSelected}
           onAnimateAll={onAnimateAll}
+          onRegenerateAll={onRegenerateAll}
         />
       </div>
 
@@ -466,6 +527,7 @@ export default function StoryboardStep({
                     Open output
                   </a>
                 ) : null}
+                {job.durationSeconds ? <p className="muted">Duration: {formatDuration(job.durationSeconds)}</p> : null}
                 {job.errorMessage ? <p className="msg error">{job.errorMessage}</p> : null}
               </div>
             ))

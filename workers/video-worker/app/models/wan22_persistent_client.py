@@ -43,6 +43,20 @@ class Wan22PersistentClient:
                 self._terminate()
                 return RenderResult(False, error_message=f"Persistent Wan2.2 render failed: {exc}")
 
+    def prewarm(self) -> None:
+        with self._lock:
+            start = now()
+            self._ensure_started()
+            request_id = f"prewarm-{int(time.time())}"
+            self._send({"command": "health", "request_id": request_id})
+            self._wait_for_command_result(request_id, start)
+            log_perf(
+                "wan_prewarm_completed",
+                duration_seconds=elapsed_seconds(start),
+                prewarm_mode="persistent_server_health",
+                loads_pipeline=False,
+            )
+
     def close(self) -> None:
         with self._lock:
             if self._process is None:
@@ -160,6 +174,22 @@ class Wan22PersistentClient:
             stdout="\n".join(collected),
             stderr="\n".join(collected),
         )
+
+    def _wait_for_command_result(self, request_id: str, start) -> None:
+        while elapsed_seconds(start) < 30:
+            self._raise_if_exited()
+            line = self._next_line(timeout=1)
+            if line is None:
+                continue
+            event = self._handle_line(line)
+            if not event or event.get("type") != "result":
+                continue
+            if event.get("request_id") != request_id:
+                continue
+            if not event.get("ok"):
+                raise RuntimeError(event.get("error") or "Persistent Wan2.2 prewarm health check failed.")
+            return
+        raise TimeoutError("Persistent Wan2.2 prewarm health check timed out.")
 
     def _next_line(self, timeout: float) -> Optional[str]:
         try:
