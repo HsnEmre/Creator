@@ -18,7 +18,16 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
             plan.VisualStyle.CameraStyle,
             plan.VisualStyle.LightingStyle,
             plan.VisualStyle.ColorPalette,
-            json.Serialize(plan.AudioCues));
+            json.Serialize(plan.AudioCues),
+            plan.DirectorTreatment,
+            json.Serialize(plan.BeatSheet),
+            json.Serialize(plan.ActBreakdown),
+            json.Serialize(plan.DirectorPlan?.CharacterBible ?? []),
+            json.Serialize(plan.DirectorPlan?.LocationBible ?? []),
+            json.Serialize(plan.DirectorPlan?.TimelineContinuity ?? []),
+            json.Serialize(plan.DirectorPlan?.VisualContinuityRules ?? []),
+            json.Serialize(plan.RenderStrategy ?? plan.DirectorPlan?.RenderStrategyRecommendation),
+            plan.RenderStrategy?.QualityGoal ?? plan.DirectorPlan?.RenderStrategyRecommendation.QualityGoal ?? "Balanced");
     }
 
     public List<Character> BuildCharacters(Guid projectId, ProductionPlanDto plan)
@@ -33,6 +42,7 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
             VisualPrompt = c.VisualPrompt,
             VoiceStyle = c.VoiceStyle,
             ContinuityRulesJson = json.Serialize(c.ContinuityRules),
+            CharacterBibleJson = json.Serialize(c.Bible),
             ReferenceImagePrompt = c.ReferenceImagePrompt,
             ReferenceImageNegativePrompt = c.ReferenceImageNegativePrompt,
             ReferenceStatus = string.IsNullOrWhiteSpace(c.ReferenceImagePrompt) ? "Missing" : "PromptReady"
@@ -56,6 +66,13 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
                 TimeOfDay = scenePlan.TimeOfDay,
                 Mood = scenePlan.Mood,
                 EstimatedDurationSeconds = scenePlan.EstimatedDurationSeconds,
+                Purpose = scenePlan.Purpose,
+                StoryStateBefore = scenePlan.StoryStateBefore,
+                StoryStateAfter = scenePlan.StoryStateAfter,
+                LocationId = scenePlan.LocationId,
+                SceneAnchorPrompt = scenePlan.SceneAnchorPrompt,
+                LocationContinuityPrompt = scenePlan.LocationContinuityPrompt,
+                ForbiddenLocationDrift = scenePlan.ForbiddenLocationDrift,
                 RequiredCharactersJson = json.Serialize(scenePlan.RequiredCharacters),
                 DialogueLinesJson = json.Serialize(scenePlan.DialogueLines)
             };
@@ -74,6 +91,18 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
                 NegativePrompt = shot.NegativePrompt,
                 AudioCue = shot.AudioCue,
                 ContinuityNotes = shot.ContinuityNotes,
+                InvolvedCharacterIdsJson = json.Serialize(shot.InvolvedCharacterIds),
+                CharacterLockPrompt = shot.CharacterLockPrompt,
+                LocationId = shot.LocationId,
+                LocationLockPrompt = shot.LocationLockPrompt,
+                ForbiddenDriftTerms = shot.ForbiddenDriftTerms,
+                PreviousShotVisualState = shot.PreviousShotVisualState,
+                CurrentShotVisualState = shot.CurrentShotVisualState,
+                NextShotSetup = shot.NextShotSetup,
+                KeyframeContinuityPrompt = shot.KeyframeContinuityPrompt,
+                SceneAnchorPrompt = shot.SceneAnchorPrompt,
+                RecommendedRenderDurationMode = shot.RecommendedRenderDurationMode,
+                AssemblyExtensionAllowed = shot.AssemblyExtensionAllowed,
                 GenerationMode = VideoGenerationMode.TextToVideo,
                 Status = ShotStatus.Pending,
                 StartImagePrompt = shot.StartImagePrompt,
@@ -133,7 +162,8 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
                 ReferenceImageNegativePrompt = c.ReferenceImageNegativePrompt,
                 ReferenceStatus = c.ReferenceStatus,
                 ReferenceImagePath = c.ReferenceImagePath,
-                ReferenceImageUrl = c.ReferenceImageUrl
+                ReferenceImageUrl = c.ReferenceImageUrl,
+                Bible = json.Deserialize<CharacterBibleDto>(c.CharacterBibleJson)
             })
             .ToList();
 
@@ -156,15 +186,57 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
                     StartImageNegativePrompt = sh.StartImageNegativePrompt,
                     StartImageStatus = sh.StartImageStatus,
                     StartImagePath = sh.StartImagePath,
-                    StartImageUrl = sh.StartImageUrl
+                    StartImageUrl = sh.StartImageUrl,
+                    InvolvedCharacterIds = json.DeserializeList<string>(sh.InvolvedCharacterIdsJson),
+                    CharacterLockPrompt = sh.CharacterLockPrompt,
+                    LocationId = sh.LocationId,
+                    LocationLockPrompt = sh.LocationLockPrompt,
+                    ForbiddenDriftTerms = sh.ForbiddenDriftTerms,
+                    PreviousShotVisualState = sh.PreviousShotVisualState,
+                    CurrentShotVisualState = sh.CurrentShotVisualState,
+                    NextShotSetup = sh.NextShotSetup,
+                    KeyframeContinuityPrompt = sh.KeyframeContinuityPrompt,
+                    SceneAnchorPrompt = sh.SceneAnchorPrompt,
+                    RecommendedRenderDurationMode = sh.RecommendedRenderDurationMode,
+                    AssemblyExtensionAllowed = sh.AssemblyExtensionAllowed
                 }).ToList(),
                 json.DeserializeList<DialogueLineDto>(s.DialogueLinesJson))
             {
-                Id = s.Id
+                Id = s.Id,
+                Purpose = s.Purpose,
+                StoryStateBefore = s.StoryStateBefore,
+                StoryStateAfter = s.StoryStateAfter,
+                LocationId = s.LocationId,
+                SceneAnchorPrompt = s.SceneAnchorPrompt,
+                LocationContinuityPrompt = s.LocationContinuityPrompt,
+                ForbiddenLocationDrift = s.ForbiddenLocationDrift
             })
             .ToList();
 
-        return ProductionPlanNormalizer.WithDurationMetadata(new ProductionPlanDto(project.Name, project.Logline, project.Genre, project.TargetDurationSeconds, visualStyle, characters, scenes, json.DeserializeList<AudioCueDto>(project.AudioCuesJson)));
+        var renderStrategy = json.Deserialize<RenderStrategyRecommendationDto>(project.RenderStrategyRecommendationJson);
+        var directorPlan = new DirectorPlanDto(
+            project.Name,
+            project.Logline ?? string.Empty,
+            project.Genre ?? string.Empty,
+            project.VisualStylePrompt ?? string.Empty,
+            project.TargetDurationSeconds,
+            project.DirectorTreatment ?? string.Empty,
+            json.DeserializeList<DirectorActDto>(project.ActBreakdownJson),
+            json.DeserializeList<DirectorBeatDto>(project.BeatSheetJson),
+            json.DeserializeList<CharacterBibleDto>(project.CharacterBibleJson),
+            json.DeserializeList<LocationBibleDto>(project.LocationBibleJson),
+            json.DeserializeList<string>(project.TimelineContinuityJson),
+            json.DeserializeList<string>(project.VisualContinuityRulesJson),
+            renderStrategy ?? new RenderStrategyRecommendationDto("Balanced", project.QualityGoal, "Use existing render profiles based on shot intent.", true, "Preview extension only.", []));
+
+        return ProductionPlanNormalizer.WithDurationMetadata(new ProductionPlanDto(project.Name, project.Logline, project.Genre, project.TargetDurationSeconds, visualStyle, characters, scenes, json.DeserializeList<AudioCueDto>(project.AudioCuesJson))
+        {
+            DirectorPlan = directorPlan,
+            DirectorTreatment = project.DirectorTreatment,
+            BeatSheet = directorPlan.StoryBeats,
+            ActBreakdown = directorPlan.ActStructure,
+            RenderStrategy = directorPlan.RenderStrategyRecommendation
+        });
     }
 }
 
@@ -178,4 +250,13 @@ public sealed record ProjectUpdateFields(
     string? CameraStyle,
     string? LightingStyle,
     string? ColorPalette,
-    string AudioCuesJson);
+    string AudioCuesJson,
+    string? DirectorTreatment,
+    string BeatSheetJson,
+    string ActBreakdownJson,
+    string CharacterBibleJson,
+    string LocationBibleJson,
+    string TimelineContinuityJson,
+    string VisualContinuityRulesJson,
+    string RenderStrategyRecommendationJson,
+    string QualityGoal);

@@ -176,6 +176,7 @@ public sealed class OllamaStoryPlanner(
         var durationGuidance = BuildDurationGuidance(targetDurationSeconds);
         var system = """
 You convert stories into production-ready AI video plans.
+Create a director planning phase before storyboard shots.
 Return ONLY valid JSON.
 No markdown.
 No explanations.
@@ -215,6 +216,12 @@ Every negativePrompt must also include scene-specific and shot-specific failure 
 Use stable recurring locations; do not make every shot a new world.
 Do not introduce new major characters unless the story requires them.
 The plan must be suitable for long-form video generation.
+The plan must feel like a coherent film with beginning, escalation, midpoint, climax, and resolution.
+Every scene must advance story state and must not repeat the same scene cycle.
+Create structural character and location continuity, not only prompt text.
+Create connected keyframe planning so shot keyframes inherit scene anchors, previous visual state, character locks, and location locks.
+Recommend render strategy metadata. FastPreview is only a test mode; final-quality motion should prefer Image-to-Video keyframes with LongMotion or ComfyUIParity/WanLong161 where appropriate.
+Final quality must not hide one-second raw clips as long motion by loop extension.
 If the requested target duration is long, break it into many short shots and many scenes.
 Do not return a tiny 1-scene or 3-shot plan for a multi-minute target.
 Wan2.2 is a video model adapter, not an Ollama model.
@@ -243,6 +250,32 @@ Return exactly one JSON object with this schema:
     "lightingStyle": "string",
     "colorPalette": "string"
   },
+  "directorTreatment": "expanded film treatment with beginning, escalation, midpoint, climax, and resolution",
+  "beatSheet": [
+    {
+      "index": 1,
+      "name": "Opening setup",
+      "purpose": "string",
+      "storyStateChange": "string",
+      "sceneIndex": 1
+    }
+  ],
+  "actBreakdown": [
+    {
+      "name": "Act I",
+      "purpose": "string",
+      "startSceneIndex": 1,
+      "endSceneIndex": 2
+    }
+  ],
+  "renderStrategy": {
+    "name": "AutoQuality",
+    "qualityGoal": "Balanced",
+    "summary": "string",
+    "allowsAssemblyExtension": false,
+    "extensionPolicy": "FastPreview may extend for preview only; final quality must render enough raw motion.",
+    "rules": ["string"]
+  },
   "characters": [
     {
       "name": "string",
@@ -251,6 +284,20 @@ Return exactly one JSON object with this schema:
       "visualPrompt": "English stable visual character bible",
       "referenceImagePrompt": "English reference image prompt: neutral cinematic background, clear face, stable clothing and identity",
       "referenceImageNegativePrompt": "low quality, watermark, text, logo, readable letters, distorted face, inconsistent face, bad hands, extra fingers, extra limbs, blurry, deformed body",
+      "bible": {
+        "characterId": "stable-id",
+        "name": "string",
+        "role": "string",
+        "faceLock": "English stable face description",
+        "hairLock": "English stable hair description",
+        "ageLock": "English stable age range",
+        "costumeLock": "English stable costume description",
+        "propLock": "English stable signature props",
+        "silhouetteLock": "English stable body/silhouette",
+        "forbiddenDrift": "different face, different hair, different costume",
+        "referenceImagePrompt": "English reference image prompt",
+        "negativeDriftPrompt": "different face, different hair, changed age, changed costume"
+      },
       "voiceStyle": "English voice style",
       "continuityRules": ["string"]
     }
@@ -264,6 +311,13 @@ Return exactly one JSON object with this schema:
       "timeOfDay": "string",
       "mood": "string",
       "estimatedDurationSeconds": 15,
+      "purpose": "story reason this scene exists",
+      "storyStateBefore": "state before this scene",
+      "storyStateAfter": "state after this scene",
+      "locationId": "stable-location-id",
+      "sceneAnchorPrompt": "English master keyframe prompt for this scene",
+      "locationContinuityPrompt": "English location continuity lock",
+      "forbiddenLocationDrift": "wrong location, wrong time of day, unrelated architecture",
       "requiredCharacters": ["character name"],
       "shots": [
         {
@@ -277,7 +331,19 @@ Return exactly one JSON object with this schema:
           "startImageNegativePrompt": "low quality, watermark, text, logo, readable letters, subtitles, distorted face, inconsistent face, inconsistent character, bad hands, extra fingers, extra limbs, blurry, deformed body, broken anatomy",
           "negativePrompt": "low quality, watermark, text, logo, distorted face, inconsistent character, bad hands, extra fingers, extra limbs, flicker, blurry, deformed body",
           "audioCue": "string",
-          "continuityNotes": "string"
+          "continuityNotes": "string",
+          "involvedCharacterIds": ["stable-id"],
+          "characterLockPrompt": "English copied per-character visual locks",
+          "locationId": "stable-location-id",
+          "locationLockPrompt": "English location lock",
+          "forbiddenDriftTerms": "different face, wrong location, changed costume",
+          "previousShotVisualState": "string",
+          "currentShotVisualState": "string",
+          "nextShotSetup": "string",
+          "keyframeContinuityPrompt": "English connected keyframe continuity prompt",
+          "sceneAnchorPrompt": "English scene anchor prompt",
+          "recommendedRenderDurationMode": "LongMotion",
+          "assemblyExtensionAllowed": false
         }
       ],
       "dialogueLines": [

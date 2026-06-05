@@ -13,6 +13,15 @@ public sealed class Project
     public string? CameraStyle { get; set; }
     public string? LightingStyle { get; set; }
     public string? ColorPalette { get; set; }
+    public string QualityGoal { get; set; } = "Balanced";
+    public string? DirectorTreatment { get; set; }
+    public string BeatSheetJson { get; set; } = "[]";
+    public string ActBreakdownJson { get; set; } = "[]";
+    public string CharacterBibleJson { get; set; } = "[]";
+    public string LocationBibleJson { get; set; } = "[]";
+    public string TimelineContinuityJson { get; set; } = "{}";
+    public string VisualContinuityRulesJson { get; set; } = "[]";
+    public string RenderStrategyRecommendationJson { get; set; } = "{}";
     public string AudioCuesJson { get; set; } = "[]";
     public ProjectStatus Status { get; set; } = ProjectStatus.Draft;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -45,6 +54,7 @@ public sealed class Character
     public string VisualPrompt { get; set; } = string.Empty;
     public string VoiceStyle { get; set; } = string.Empty;
     public string ContinuityRulesJson { get; set; } = "[]";
+    public string CharacterBibleJson { get; set; } = "{}";
 }
 
 public sealed class Scene
@@ -61,6 +71,13 @@ public sealed class Scene
     public string TimeOfDay { get; set; } = string.Empty;
     public string Mood { get; set; } = string.Empty;
     public int EstimatedDurationSeconds { get; set; }
+    public string? Purpose { get; set; }
+    public string? StoryStateBefore { get; set; }
+    public string? StoryStateAfter { get; set; }
+    public string? LocationId { get; set; }
+    public string? SceneAnchorPrompt { get; set; }
+    public string? LocationContinuityPrompt { get; set; }
+    public string? ForbiddenLocationDrift { get; set; }
     public string RequiredCharactersJson { get; set; } = "[]";
     public string DialogueLinesJson { get; set; } = "[]";
     public List<Shot> Shots { get; set; } = [];
@@ -84,6 +101,18 @@ public sealed class Shot
     public string? NegativePrompt { get; set; }
     public string AudioCue { get; set; } = string.Empty;
     public string ContinuityNotes { get; set; } = string.Empty;
+    public string InvolvedCharacterIdsJson { get; set; } = "[]";
+    public string? CharacterLockPrompt { get; set; }
+    public string? LocationId { get; set; }
+    public string? LocationLockPrompt { get; set; }
+    public string? ForbiddenDriftTerms { get; set; }
+    public string? PreviousShotVisualState { get; set; }
+    public string? CurrentShotVisualState { get; set; }
+    public string? NextShotSetup { get; set; }
+    public string? KeyframeContinuityPrompt { get; set; }
+    public string? SceneAnchorPrompt { get; set; }
+    public string? RecommendedRenderDurationMode { get; set; }
+    public bool AssemblyExtensionAllowed { get; set; } = true;
     public VideoGenerationMode GenerationMode { get; set; } = VideoGenerationMode.TextToVideo;
     public ShotStatus Status { get; set; } = ShotStatus.Pending;
     public string? InputImagePath { get; set; }

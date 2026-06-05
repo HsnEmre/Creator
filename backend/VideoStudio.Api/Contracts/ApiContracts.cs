@@ -9,6 +9,7 @@ public sealed class CreateProjectRequest
     public string? StoryText { get; set; }
     public string? Description { get; set; }
     public int? TargetDurationSeconds { get; set; }
+    public string? QualityGoal { get; set; }
 }
 
 public sealed class StoryRequest
@@ -45,9 +46,68 @@ public sealed record ProductionPlanDto(
     public int DistinctNegativePromptCount { get; init; }
     public int DuplicateNegativePromptGroups { get; init; }
     public string? ContinuityWarning { get; init; }
+    public DirectorPlanDto? DirectorPlan { get; init; }
+    public string? DirectorTreatment { get; init; }
+    public List<DirectorBeatDto> BeatSheet { get; init; } = [];
+    public List<DirectorActDto> ActBreakdown { get; init; } = [];
+    public RenderStrategyRecommendationDto? RenderStrategy { get; init; }
+    public bool HasDirectorPlan { get; init; }
+    public bool StoryStructureValid { get; init; }
+    public bool LocationContinuityValid { get; init; }
+    public bool KeyframeContinuityValid { get; init; }
+    public string? RenderStrategyName { get; init; }
+    public string? AssemblyExtensionPolicy { get; init; }
 };
 
 public sealed record VisualStyleDto(string StylePrompt, string NegativePrompt, string CameraStyle, string LightingStyle, string ColorPalette);
+
+public sealed record DirectorPlanDto(
+    string FilmTitle,
+    string Logline,
+    string Genre,
+    string Tone,
+    int TargetDurationSeconds,
+    string DirectorTreatment,
+    List<DirectorActDto> ActStructure,
+    List<DirectorBeatDto> StoryBeats,
+    List<CharacterBibleDto> CharacterBible,
+    List<LocationBibleDto> LocationBible,
+    List<string> TimelineContinuity,
+    List<string> VisualContinuityRules,
+    RenderStrategyRecommendationDto RenderStrategyRecommendation);
+
+public sealed record DirectorActDto(string Name, string Purpose, int StartSceneIndex, int EndSceneIndex);
+public sealed record DirectorBeatDto(int Index, string Name, string Purpose, string StoryStateChange, int SceneIndex);
+public sealed record CharacterBibleDto(
+    string CharacterId,
+    string Name,
+    string Role,
+    string FaceLock,
+    string HairLock,
+    string AgeLock,
+    string CostumeLock,
+    string PropLock,
+    string SilhouetteLock,
+    string ForbiddenDrift,
+    string ReferenceImagePrompt,
+    string NegativeDriftPrompt);
+public sealed record LocationBibleDto(
+    string LocationId,
+    string Name,
+    string VisualDescription,
+    string TimeOfDay,
+    string Weather,
+    string ArchitectureMaterials,
+    string RecurringProps,
+    string ContinuityNotes,
+    string NegativeLocationDrift);
+public sealed record RenderStrategyRecommendationDto(
+    string Name,
+    string QualityGoal,
+    string Summary,
+    bool AllowsAssemblyExtension,
+    string ExtensionPolicy,
+    List<string> Rules);
 
 public sealed record CharacterPlanDto(
     string Name,
@@ -63,6 +123,7 @@ public sealed record CharacterPlanDto(
     public string? ReferenceStatus { get; init; }
     public string? ReferenceImagePath { get; init; }
     public string? ReferenceImageUrl { get; init; }
+    public CharacterBibleDto? Bible { get; init; }
 }
 
 public sealed record ScenePlanDto(
@@ -78,6 +139,13 @@ public sealed record ScenePlanDto(
     List<DialogueLineDto> DialogueLines)
 {
     public Guid? Id { get; init; }
+    public string? Purpose { get; init; }
+    public string? StoryStateBefore { get; init; }
+    public string? StoryStateAfter { get; init; }
+    public string? LocationId { get; init; }
+    public string? SceneAnchorPrompt { get; init; }
+    public string? LocationContinuityPrompt { get; init; }
+    public string? ForbiddenLocationDrift { get; init; }
 }
 
 public sealed record ShotPlanDto(
@@ -98,6 +166,18 @@ public sealed record ShotPlanDto(
     public string? StartImageStatus { get; init; }
     public string? StartImagePath { get; init; }
     public string? StartImageUrl { get; init; }
+    public List<string> InvolvedCharacterIds { get; init; } = [];
+    public string? CharacterLockPrompt { get; init; }
+    public string? LocationId { get; init; }
+    public string? LocationLockPrompt { get; init; }
+    public string? ForbiddenDriftTerms { get; init; }
+    public string? PreviousShotVisualState { get; init; }
+    public string? CurrentShotVisualState { get; init; }
+    public string? NextShotSetup { get; init; }
+    public string? KeyframeContinuityPrompt { get; init; }
+    public string? SceneAnchorPrompt { get; init; }
+    public string? RecommendedRenderDurationMode { get; init; }
+    public bool AssemblyExtensionAllowed { get; init; } = true;
 }
 
 public sealed record DialogueLineDto(string Speaker, string Text, string Emotion, int EstimatedStartSecond, int EstimatedEndSecond);

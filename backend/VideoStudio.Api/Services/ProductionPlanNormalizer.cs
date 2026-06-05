@@ -1,4 +1,5 @@
 using VideoStudio.Api.Contracts;
+using VideoStudio.Api.Domain;
 
 namespace VideoStudio.Api.Services;
 
@@ -81,6 +82,7 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
         }
 
         normalized = ValidateAndRepairNegativePrompts(normalized, characters, projectId);
+        normalized = ApplyDirectorPlanning(normalized, projectId);
 
         logger.LogInformation(
             "storyboard_duration_validation_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} totalPlannedDurationSeconds={TotalPlannedDurationSeconds} plannedDurationCoveragePercent={CoveragePercent} isDurationPlanValid={IsDurationPlanValid}",
@@ -131,9 +133,336 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             CharacterVisualLocksApplied = characterLocksApplied,
             DistinctNegativePromptCount = distinctNegativePrompts,
             DuplicateNegativePromptGroups = duplicateNegativePromptGroups,
-            ContinuityWarning = continuityWarning
+            ContinuityWarning = continuityWarning,
+            HasDirectorPlan = plan.DirectorPlan is not null && !string.IsNullOrWhiteSpace(plan.DirectorTreatment),
+            StoryStructureValid = plan.BeatSheet.Count > 0 && plan.ActBreakdown.Count > 0 && sceneCount > 0 && shotCount > 0,
+            LocationContinuityValid = plan.DirectorPlan?.LocationBible.Count > 0 && plan.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.LocationId)),
+            KeyframeContinuityValid = plan.Scenes.SelectMany(scene => scene.Shots).All(shot => !string.IsNullOrWhiteSpace(shot.KeyframeContinuityPrompt)),
+            RenderStrategyName = plan.RenderStrategy?.Name ?? plan.DirectorPlan?.RenderStrategyRecommendation.Name,
+            AssemblyExtensionPolicy = plan.RenderStrategy?.ExtensionPolicy ?? plan.DirectorPlan?.RenderStrategyRecommendation.ExtensionPolicy
         };
     }
+
+    private ProductionPlanDto ApplyDirectorPlanning(ProductionPlanDto plan, Guid? projectId)
+    {
+        var sceneCount = plan.Scenes.Count;
+        var shotCount = plan.Scenes.Sum(scene => scene.Shots.Count);
+        var uniqueSceneBeatCount = plan.Scenes.Select(scene => NormalizePromptKey(scene.Purpose ?? scene.Summary ?? scene.Title)).Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var duplicateShotActionCount = plan.Scenes
+            .SelectMany(scene => scene.Shots)
+            .GroupBy(shot => NormalizePromptKey(shot.Action), StringComparer.OrdinalIgnoreCase)
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1)
+            .Sum(group => group.Count() - 1);
+        var repeatedSceneCycleDetected = uniqueSceneBeatCount > 0 && sceneCount >= 4 && uniqueSceneBeatCount <= Math.Max(2, sceneCount / 3);
+        var characterContinuityValid = plan.Characters.Count == 0 || plan.Characters.All(c => c.Bible is not null || (!string.IsNullOrWhiteSpace(c.VisualPrompt) && c.ContinuityRules.Count > 0));
+        var locationContinuityValid = plan.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.LocationId ?? Slug(scene.Location)));
+        var keyframeContinuityValid = plan.Scenes.SelectMany(scene => scene.Shots).All(shot => !string.IsNullOrWhiteSpace(shot.KeyframeContinuityPrompt ?? shot.StartImagePrompt));
+
+        logger.LogInformation(
+            "director_plan_validation_started projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} uniqueSceneBeatCount={UniqueSceneBeatCount} duplicateShotActionCount={DuplicateShotActionCount} repeatedSceneCycleDetected={RepeatedSceneCycleDetected} characterContinuityValid={CharacterContinuityValid} locationContinuityValid={LocationContinuityValid} keyframeContinuityValid={KeyframeContinuityValid}",
+            projectId,
+            plan.TargetDurationSeconds,
+            sceneCount,
+            shotCount,
+            uniqueSceneBeatCount,
+            duplicateShotActionCount,
+            repeatedSceneCycleDetected,
+            characterContinuityValid,
+            locationContinuityValid,
+            keyframeContinuityValid);
+
+        var needsRepair = plan.DirectorPlan is null
+            || string.IsNullOrWhiteSpace(plan.DirectorTreatment)
+            || plan.BeatSheet.Count == 0
+            || plan.ActBreakdown.Count == 0
+            || repeatedSceneCycleDetected
+            || !characterContinuityValid
+            || !locationContinuityValid
+            || !keyframeContinuityValid;
+
+        if (needsRepair)
+        {
+            logger.LogWarning(
+                "director_plan_validation_failed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} uniqueSceneBeatCount={UniqueSceneBeatCount} duplicateShotActionCount={DuplicateShotActionCount} repeatedSceneCycleDetected={RepeatedSceneCycleDetected} characterContinuityValid={CharacterContinuityValid} locationContinuityValid={LocationContinuityValid} keyframeContinuityValid={KeyframeContinuityValid}",
+                projectId,
+                plan.TargetDurationSeconds,
+                sceneCount,
+                shotCount,
+                uniqueSceneBeatCount,
+                duplicateShotActionCount,
+                repeatedSceneCycleDetected,
+                characterContinuityValid,
+                locationContinuityValid,
+                keyframeContinuityValid);
+            logger.LogInformation("director_plan_repair_started projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds}", projectId, plan.TargetDurationSeconds);
+            plan = BuildDirectorPlan(plan, projectId);
+            logger.LogInformation("director_plan_repair_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount}", projectId, plan.TargetDurationSeconds, plan.Scenes.Count, plan.Scenes.Sum(s => s.Shots.Count));
+        }
+        else
+        {
+            plan = BuildDirectorPlan(plan, projectId);
+        }
+
+        logger.LogInformation(
+            "director_plan_validation_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} uniqueSceneBeatCount={UniqueSceneBeatCount} duplicateShotActionCount={DuplicateShotActionCount} repeatedSceneCycleDetected={RepeatedSceneCycleDetected} characterContinuityValid={CharacterContinuityValid} locationContinuityValid={LocationContinuityValid} keyframeContinuityValid={KeyframeContinuityValid}",
+            projectId,
+            plan.TargetDurationSeconds,
+            plan.Scenes.Count,
+            plan.Scenes.Sum(scene => scene.Shots.Count),
+            plan.Scenes.Select(scene => NormalizePromptKey(scene.Purpose ?? scene.Summary ?? scene.Title)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            plan.Scenes.SelectMany(scene => scene.Shots).GroupBy(shot => NormalizePromptKey(shot.Action), StringComparer.OrdinalIgnoreCase).Where(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1).Sum(group => group.Count() - 1),
+            false,
+            true,
+            true,
+            true);
+
+        return WithDurationMetadata(plan);
+    }
+
+    private ProductionPlanDto BuildDirectorPlan(ProductionPlanDto plan, Guid? projectId)
+    {
+        logger.LogInformation("director_keyframe_continuity_started projectId={ProjectId} sceneCount={SceneCount} shotCount={ShotCount}", projectId, plan.Scenes.Count, plan.Scenes.Sum(s => s.Shots.Count));
+
+        var characterBible = plan.Characters.Select(BuildCharacterBible).ToList();
+        var characters = plan.Characters.Select(character => character with
+        {
+            Bible = characterBible.FirstOrDefault(bible => bible.Name.Equals(character.Name, StringComparison.OrdinalIgnoreCase))
+        }).ToList();
+        var locationBible = BuildLocationBible(plan);
+        var acts = BuildActs(plan.Scenes);
+        var beats = BuildBeats(plan.Scenes);
+        var renderStrategy = BuildRenderStrategy(plan.TargetDurationSeconds);
+        var scenes = new List<ScenePlanDto>();
+
+        foreach (var scene in plan.Scenes.OrderBy(s => s.Index))
+        {
+            var location = locationBible.FirstOrDefault(l => l.Name.Equals(scene.Location, StringComparison.OrdinalIgnoreCase)) ?? locationBible.FirstOrDefault();
+            var locationId = location?.LocationId ?? Slug(scene.Location);
+            var sceneAnchor = BuildSceneAnchor(plan, scene, location, characters);
+            logger.LogInformation("director_keyframe_scene_anchor_created projectId={ProjectId} sceneIndex={SceneIndex} locationId={LocationId}", projectId, scene.Index, locationId);
+
+            var previousState = $"Scene {scene.Index} opens from story state: {Required(scene.StoryStateBefore, SceneStateBefore(scene))}.";
+            var plannedShots = new List<ShotPlanDto>();
+            foreach (var shot in scene.Shots.OrderBy(s => s.Index))
+            {
+                var involvedCharacters = FindInvolvedCharacters(scene, shot, characters);
+                var characterLock = BuildDirectorCharacterLock(involvedCharacters, characters);
+                var locationLock = $"{location?.Name ?? scene.Location}: {location?.VisualDescription ?? scene.Location}, {location?.TimeOfDay ?? scene.TimeOfDay}, {location?.Weather ?? "motivated weather"}, recurring props: {location?.RecurringProps ?? "stable set dressing"}";
+                var currentState = $"Scene {scene.Index} shot {shot.Index}: {Required(shot.Action, scene.Summary)} in {scene.Location}.";
+                var nextSetup = shot.Index < scene.Shots.Count
+                    ? $"Continue the same scene geography, character blocking, lighting, and emotional direction into shot {shot.Index + 1}."
+                    : $"Prepare the transition from scene {scene.Index} to the next story beat without changing character identity.";
+                logger.LogInformation("director_keyframe_previous_state_applied projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex}", projectId, scene.Index, shot.Index);
+                logger.LogInformation("director_keyframe_image_reference_unavailable projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} reason={Reason}", projectId, scene.Index, shot.Index, "current still-image adapter is text-conditioned; prior keyframes are represented as text continuity prompts");
+
+                var keyframePrompt = $"Connected keyframe for scene {scene.Index}, shot {shot.Index}. Scene anchor: {sceneAnchor}. Previous visual state: {previousState}. Current visual state: {currentState}. Character locks: {characterLock}. Location lock: {locationLock}. Next shot setup: {nextSetup}. No readable text, logos, subtitles, or dialogue.";
+                var recommendedMode = RecommendRenderDurationMode(shot, plan.TargetDurationSeconds);
+                plannedShots.Add(shot with
+                {
+                    InvolvedCharacterIds = involvedCharacters.Select(c => c.Name).ToList(),
+                    CharacterLockPrompt = characterLock,
+                    LocationId = locationId,
+                    LocationLockPrompt = locationLock,
+                    ForbiddenDriftTerms = $"{location?.NegativeLocationDrift ?? "wrong location, wrong weather, wrong era"}, different face, different hair, different costume, unrelated character",
+                    PreviousShotVisualState = previousState,
+                    CurrentShotVisualState = currentState,
+                    NextShotSetup = nextSetup,
+                    KeyframeContinuityPrompt = keyframePrompt,
+                    SceneAnchorPrompt = sceneAnchor,
+                    RecommendedRenderDurationMode = recommendedMode.ToString(),
+                    AssemblyExtensionAllowed = recommendedMode == RenderDurationMode.FastPreview || recommendedMode == RenderDurationMode.CinematicPreview,
+                    ContinuityNotes = $"{Required(shot.ContinuityNotes, "Maintain continuity.")} Previous: {previousState} Current: {currentState} Next: {nextSetup}",
+                    StartImagePrompt = $"{Required(shot.StartImagePrompt, keyframePrompt)} Connected continuity: {keyframePrompt}"
+                });
+                previousState = currentState;
+            }
+
+            scenes.Add(scene with
+            {
+                Purpose = Required(scene.Purpose, ScenePurpose(scene)),
+                StoryStateBefore = Required(scene.StoryStateBefore, SceneStateBefore(scene)),
+                StoryStateAfter = Required(scene.StoryStateAfter, SceneStateAfter(scene)),
+                LocationId = locationId,
+                SceneAnchorPrompt = sceneAnchor,
+                LocationContinuityPrompt = location?.ContinuityNotes ?? $"Keep {scene.Location} visually stable across all shots in scene {scene.Index}.",
+                ForbiddenLocationDrift = location?.NegativeLocationDrift ?? "wrong location, modern objects, unrelated architecture, wrong weather, wrong time of day",
+                Shots = plannedShots
+            });
+        }
+
+        logger.LogInformation("director_keyframe_continuity_completed projectId={ProjectId} sceneCount={SceneCount} shotCount={ShotCount}", projectId, scenes.Count, scenes.Sum(s => s.Shots.Count));
+
+        var treatment = Required(plan.DirectorTreatment, BuildTreatment(plan));
+        var directorPlan = new DirectorPlanDto(
+            plan.Title,
+            plan.Logline ?? string.Empty,
+            plan.Genre ?? string.Empty,
+            Required(plan.VisualStyle.StylePrompt, "cinematic realism"),
+            plan.TargetDurationSeconds,
+            treatment,
+            acts,
+            beats,
+            characterBible,
+            locationBible,
+            scenes.Select(scene => $"Scene {scene.Index}: {scene.StoryStateBefore} -> {scene.StoryStateAfter}").ToList(),
+            [
+                "Repeat character face, hair, costume, silhouette, and signature props in every relevant shot.",
+                "Keep repeated locations anchored by time of day, weather, architecture, and recurring props.",
+                "Connected keyframes must inherit scene anchor, previous visual state, and next-shot setup."
+            ],
+            renderStrategy);
+
+        return plan with
+        {
+            Characters = characters,
+            Scenes = scenes,
+            DirectorPlan = directorPlan,
+            DirectorTreatment = treatment,
+            BeatSheet = beats,
+            ActBreakdown = acts,
+            RenderStrategy = renderStrategy
+        };
+    }
+
+    private static CharacterBibleDto BuildCharacterBible(CharacterPlanDto character)
+    {
+        var visual = Required(character.VisualPrompt, $"{character.Name}, stable cinematic identity");
+        return character.Bible ?? new CharacterBibleDto(
+            Slug(character.Name),
+            character.Name,
+            Required(character.Role, "story character"),
+            visual,
+            visual,
+            visual,
+            visual,
+            "signature props remain stable unless the story explicitly changes them",
+            visual,
+            "different face, different hair, different age, different costume, missing signature prop, changed silhouette",
+            Required(character.ReferenceImagePrompt, BuildCharacterReferencePrompt(character.Name, visual)),
+            Required(character.ReferenceImageNegativePrompt, StrongNegativePrompt));
+    }
+
+    private static List<LocationBibleDto> BuildLocationBible(ProductionPlanDto plan)
+    {
+        return plan.Scenes
+            .GroupBy(scene => Required(scene.Location, "story location"), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var first = group.First();
+                return new LocationBibleDto(
+                    Slug(first.Location),
+                    Required(first.Location, "story location"),
+                    $"{Required(first.Location, "story location")}, {Required(first.Mood, "cinematic mood")}, {plan.VisualStyle.ColorPalette}",
+                    Required(first.TimeOfDay, "motivated time of day"),
+                    "story-motivated weather, stable within repeated scenes",
+                    "consistent architecture, materials, terrain, and set dressing",
+                    "recurring props remain in the same visual world",
+                    $"When returning to {first.Location}, preserve time of day, lighting logic, set dressing, and geography.",
+                    "wrong location, unrelated architecture, wrong climate, wrong time of day, modern objects, mismatched props");
+            })
+            .ToList();
+    }
+
+    private static List<DirectorActDto> BuildActs(List<ScenePlanDto> scenes)
+    {
+        if (scenes.Count == 0)
+        {
+            return [new DirectorActDto("Act I", "Setup the story premise.", 1, 1)];
+        }
+
+        var last = scenes.Max(s => s.Index);
+        var actOneEnd = Math.Max(1, (int)Math.Ceiling(last * 0.25));
+        var actTwoEnd = Math.Max(actOneEnd, (int)Math.Ceiling(last * 0.75));
+        return
+        [
+            new DirectorActDto("Act I", "Setup the premise, main character need, and first irreversible movement.", 1, actOneEnd),
+            new DirectorActDto("Act II", "Escalate obstacles, deepen the conflict, and reach the midpoint reversal.", Math.Min(last, actOneEnd + 1), actTwoEnd),
+            new DirectorActDto("Act III", "Resolve the confrontation and show consequence.", Math.Min(last, actTwoEnd + 1), last)
+        ];
+    }
+
+    private static List<DirectorBeatDto> BuildBeats(List<ScenePlanDto> scenes)
+    {
+        return scenes.OrderBy(scene => scene.Index).Select(scene => new DirectorBeatDto(
+            scene.Index,
+            scene.Index == 1 ? "Opening setup" : scene.Index == scenes.Count ? "Resolution" : $"Beat {scene.Index}",
+            Required(scene.Purpose, ScenePurpose(scene)),
+            $"{Required(scene.StoryStateBefore, SceneStateBefore(scene))} -> {Required(scene.StoryStateAfter, SceneStateAfter(scene))}",
+            scene.Index)).ToList();
+    }
+
+    private static RenderStrategyRecommendationDto BuildRenderStrategy(int targetDurationSeconds)
+    {
+        var qualityGoal = targetDurationSeconds >= 180 ? "Final quality / AutoQuality" : "Balanced";
+        return new RenderStrategyRecommendationDto(
+            "AutoQuality",
+            qualityGoal,
+            "Choose per-shot render duration from shot intent. Keep FastPreview for tests; use keyframe-driven longer profiles for final-quality motion.",
+            false,
+            "FastPreview may be duration-extended for previews. Final-quality modes must not hide one-second clips as long motion.",
+            [
+                "Establishing shots prefer ComfyUIParity when keyframes are available.",
+                "Close emotional shots prefer LongMotion or ComfyUIParity with Image-to-Video keyframes.",
+                "Fast action shots prefer CinematicPreview or LongMotion to avoid overloaded motion.",
+                "Long films should add shots instead of making single shots extremely long."
+            ]);
+    }
+
+    private static RenderDurationMode RecommendRenderDurationMode(ShotPlanDto shot, int targetDurationSeconds)
+    {
+        var text = $"{shot.ShotType} {shot.CameraMotion} {shot.Action}".ToLowerInvariant();
+        if (ContainsAny(text, "establishing", "wide", "landscape", "arrival", "approach"))
+        {
+            return RenderDurationMode.ComfyUIParity;
+        }
+
+        if (ContainsAny(text, "close", "emotion", "face", "look", "tear", "dialogue"))
+        {
+            return targetDurationSeconds >= 180 ? RenderDurationMode.ComfyUIParity : RenderDurationMode.LongMotion;
+        }
+
+        if (ContainsAny(text, "fight", "battle", "run", "chase", "explosion", "fast"))
+        {
+            return RenderDurationMode.CinematicPreview;
+        }
+
+        return targetDurationSeconds >= 60 ? RenderDurationMode.LongMotion : RenderDurationMode.CinematicPreview;
+    }
+
+    private static string BuildTreatment(ProductionPlanDto plan)
+    {
+        var opening = plan.Scenes.FirstOrDefault()?.Summary ?? plan.Logline ?? plan.Title;
+        var ending = plan.Scenes.LastOrDefault()?.Summary ?? "the story resolves with clear consequence";
+        return $"{plan.Title} is shaped as a coherent short film: it opens with {opening}, escalates through distinct story beats, reaches a midpoint change, and resolves with {ending}. Each scene changes the story state instead of repeating the same visual situation.";
+    }
+
+    private static string BuildSceneAnchor(ProductionPlanDto plan, ScenePlanDto scene, LocationBibleDto? location, List<CharacterPlanDto> characters)
+    {
+        var required = NormalizeRequiredCharacters(scene.RequiredCharacters, scene, characters);
+        var locks = BuildCharacterLocks(required, characters);
+        return $"Scene {scene.Index} master keyframe anchor: {Required(scene.Location, "story location")}, {Required(scene.TimeOfDay, "motivated time")}, {Required(scene.Mood, "cinematic mood")}, {location?.ArchitectureMaterials ?? "consistent materials"}, {location?.RecurringProps ?? "stable props"}. Characters: {locks}. Style: {plan.VisualStyle.StylePrompt}.";
+    }
+
+    private static List<CharacterPlanDto> FindInvolvedCharacters(ScenePlanDto scene, ShotPlanDto shot, List<CharacterPlanDto> characters)
+    {
+        var names = NormalizeRequiredCharacters(scene.RequiredCharacters, scene, characters);
+        var text = $"{shot.Action} {shot.WanPrompt} {shot.ContinuityNotes}";
+        var matched = characters.Where(character => names.Contains(character.Name, StringComparer.OrdinalIgnoreCase) || text.Contains(character.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+        return matched.Count > 0 ? matched : characters.Where(c => names.Contains(c.Name, StringComparer.OrdinalIgnoreCase)).ToList();
+    }
+
+    private static string BuildDirectorCharacterLock(List<CharacterPlanDto> involvedCharacters, List<CharacterPlanDto> characters)
+    {
+        var source = involvedCharacters.Count > 0 ? involvedCharacters : characters.Take(1).ToList();
+        return string.Join(" ", source.Select(character => $"{character.Name}: {character.Bible?.FaceLock ?? character.VisualPrompt}; costume lock: {character.Bible?.CostumeLock ?? character.VisualPrompt}; forbidden drift: {character.Bible?.ForbiddenDrift ?? "different face, different hair, different costume"}"));
+    }
+
+    private static string ScenePurpose(ScenePlanDto scene) => $"Advance the story through this beat: {Required(scene.Summary, scene.Title)}";
+    private static string SceneStateBefore(ScenePlanDto scene) => scene.Index == 1 ? "The story premise is unresolved." : $"The previous beat leads into {Required(scene.Title, $"scene {scene.Index}")}.";
+    private static string SceneStateAfter(ScenePlanDto scene) => $"The characters and situation are changed by {Required(scene.Summary, scene.Title)}.";
+    private static string Slug(string? value) => string.IsNullOrWhiteSpace(value)
+        ? "unknown"
+        : string.Concat(value.Trim().ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')).Trim('-');
 
     public static string DefaultImageNegativePrompt()
     {

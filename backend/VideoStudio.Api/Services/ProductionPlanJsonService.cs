@@ -93,6 +93,23 @@ public sealed class ProductionPlanJsonService(ILogger<ProductionPlanJsonService>
 
     public string Serialize<T>(T value) => JsonSerializer.Serialize(value, _jsonOptions);
 
+    public T? Deserialize<T>(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return default;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json, _jsonOptions);
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
+    }
+
     public List<T> DeserializeList<T>(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))

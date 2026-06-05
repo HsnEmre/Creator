@@ -80,7 +80,8 @@ app.MapPost("/api/projects", async (CreateProjectRequest request, VideoStudioDbC
     {
         Name = title.Trim(),
         StoryText = request.StoryText ?? request.Description,
-        TargetDurationSeconds = request.TargetDurationSeconds is > 0 ? request.TargetDurationSeconds.Value : 60
+        TargetDurationSeconds = request.TargetDurationSeconds is > 0 ? request.TargetDurationSeconds.Value : 60,
+        QualityGoal = string.IsNullOrWhiteSpace(request.QualityGoal) ? "Balanced" : request.QualityGoal.Trim()
     };
     db.Projects.Add(project);
     await db.SaveChangesAsync();
@@ -234,6 +235,15 @@ app.MapPost("/api/projects/{id:guid}/analyze", async (Guid id, VideoStudioDbCont
                 .SetProperty(p => p.LightingStyle, projectUpdate.LightingStyle)
                 .SetProperty(p => p.ColorPalette, projectUpdate.ColorPalette)
                 .SetProperty(p => p.AudioCuesJson, projectUpdate.AudioCuesJson)
+                .SetProperty(p => p.DirectorTreatment, projectUpdate.DirectorTreatment)
+                .SetProperty(p => p.BeatSheetJson, projectUpdate.BeatSheetJson)
+                .SetProperty(p => p.ActBreakdownJson, projectUpdate.ActBreakdownJson)
+                .SetProperty(p => p.CharacterBibleJson, projectUpdate.CharacterBibleJson)
+                .SetProperty(p => p.LocationBibleJson, projectUpdate.LocationBibleJson)
+                .SetProperty(p => p.TimelineContinuityJson, projectUpdate.TimelineContinuityJson)
+                .SetProperty(p => p.VisualContinuityRulesJson, projectUpdate.VisualContinuityRulesJson)
+                .SetProperty(p => p.RenderStrategyRecommendationJson, projectUpdate.RenderStrategyRecommendationJson)
+                .SetProperty(p => p.QualityGoal, projectUpdate.QualityGoal)
                 .SetProperty(p => p.Status, ProjectStatus.ReadyForRender)
                 .SetProperty(p => p.UpdatedAt, DateTimeOffset.UtcNow), cancellationToken);
 
@@ -613,14 +623,16 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
     var settings = GetPresetSettings(preset);
     var hasExplicitTarget = request?.ShotIds?.Count > 0 || request?.SceneIndex is not null || request?.ShotIndex is not null;
     var limitedShots = hasExplicitTarget ? shots : shots.Take(maxShots).ToList();
-    if (RequiresImageToVideoKeyframes(renderDurationMode) && !useShotStartImage)
+    var renderModeByShotId = limitedShots.ToDictionary(shot => shot.Id, shot => ResolveRenderDurationMode(renderDurationMode, shot));
+    var strictI2vRequested = renderModeByShotId.Values.Any(RequiresImageToVideoKeyframes);
+    if (strictI2vRequested && !useShotStartImage)
     {
         logger.LogWarning(
             "{RenderProfile}_i2v_required projectId={ProjectId} shotCount={ShotCount}",
             renderDurationMode.ToString().ToLowerInvariant(),
             project.Id,
             limitedShots.Count);
-        if (renderDurationMode == RenderDurationMode.ComfyUIParity)
+        if (renderModeByShotId.Values.Any(mode => mode == RenderDurationMode.ComfyUIParity))
         {
             logger.LogWarning(
                 "comfyui_parity_i2v_required projectId={ProjectId} shotCount={ShotCount}",
@@ -629,11 +641,11 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
         }
         return Results.BadRequest(new
         {
-            error = $"{renderDurationMode} requires Image-to-Video from shot keyframes. Enable useShotStartImage and generate or upload keyframes before queueing {renderDurationMode} renders."
+            error = $"{renderDurationMode} requires Image-to-Video from shot keyframes for final-quality motion. Enable useShotStartImage and generate or upload keyframes before queueing {renderDurationMode} renders."
         });
     }
 
-    if (RequiresImageToVideoKeyframes(renderDurationMode) && useShotStartImage)
+    if (strictI2vRequested && useShotStartImage)
     {
         logger.LogInformation(
             "{RenderProfile}_keyframe_required projectId={ProjectId} shotCount={ShotCount}",
@@ -641,6 +653,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             project.Id,
             limitedShots.Count);
         var missingLongMotionKeyframes = limitedShots
+            .Where(shot => RequiresImageToVideoKeyframes(renderModeByShotId[shot.Id]))
             .Where(shot => string.IsNullOrWhiteSpace(shot.StartImagePath))
             .Select(shot => new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index))
             .ToList();
@@ -679,7 +692,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             }
 
             if (latestSuccessfulRenders.TryGetValue(shot.Id, out var latestSuccessfulRender) &&
-                CompletedRenderSatisfiesRequestedMode(latestSuccessfulRender, renderDurationMode))
+                CompletedRenderSatisfiesRequestedMode(latestSuccessfulRender, renderModeByShotId[shot.Id]))
             {
                 skippedShotDtos.Add(new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index));
                 continue;
@@ -709,6 +722,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
         var generationMode = string.IsNullOrWhiteSpace(inputImagePath)
             ? VideoGenerationMode.TextToVideo
             : VideoGenerationMode.ImageToVideo;
+        var effectiveRenderDurationMode = renderModeByShotId[shot.Id];
         var compiled = promptCompiler.Compile(
             project,
             shot.Scene!,
@@ -717,14 +731,14 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             preset,
             useCharacterReferenceInPrompt,
             generationMode == VideoGenerationMode.ImageToVideo,
-            renderDurationMode);
+            effectiveRenderDurationMode);
         if (generationMode == VideoGenerationMode.ImageToVideo)
         {
-            if (RequiresImageToVideoKeyframes(renderDurationMode))
+            if (RequiresImageToVideoKeyframes(effectiveRenderDurationMode))
             {
                 logger.LogInformation(
                     "{RenderProfile}_i2v_confirmed projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} startImagePath={StartImagePath}",
-                    renderDurationMode.ToString().ToLowerInvariant(),
+                    effectiveRenderDurationMode.ToString().ToLowerInvariant(),
                     project.Id,
                     shot.Scene!.Index,
                     shot.Index,
@@ -741,18 +755,18 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
         }
         else
         {
-            if (RequiresImageToVideoKeyframes(renderDurationMode))
+            if (RequiresImageToVideoKeyframes(effectiveRenderDurationMode))
             {
                 logger.LogWarning(
                     "{RenderProfile}_text_only_blocked projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} useShotStartImage={UseShotStartImage} reason={Reason}",
-                    renderDurationMode.ToString().ToLowerInvariant(),
+                    effectiveRenderDurationMode.ToString().ToLowerInvariant(),
                     project.Id,
                     shot.Scene!.Index,
                     shot.Index,
                     shot.Id,
                     useShotStartImage,
                     useShotStartImage ? "missing keyframe was blocked before queueing" : "user explicitly disabled Image-to-Video keyframes");
-                if (renderDurationMode == RenderDurationMode.ComfyUIParity)
+                if (effectiveRenderDurationMode == RenderDurationMode.ComfyUIParity)
                 {
                     logger.LogWarning(
                         "comfyui_parity_text_only_blocked projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} useShotStartImage={UseShotStartImage}",
@@ -772,9 +786,20 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
                 useCharacterReferenceInPrompt && project.Characters.Any(c => !string.IsNullOrWhiteSpace(c.ReferenceImagePath)),
                 "current render path only passes shot start images as Wan2.2 --image; character references are prompt identity guidance");
         }
-        var durationSelection = SelectRenderDuration(renderDurationMode, settings.frameNum, shot.DurationSeconds);
-        var renderSize = SelectRenderSize(renderDurationMode, settings.size, logger, project.Id, shot.Scene!.Index, shot.Index, shot.Id);
-        var sampleSteps = SelectSampleSteps(renderDurationMode, settings.sampleSteps);
+        if (renderDurationMode == RenderDurationMode.AutoQuality)
+        {
+            logger.LogInformation(
+                "autoquality_render_strategy_selected projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} recommendedRenderDurationMode={RenderDurationMode} assemblyExtensionAllowed={AssemblyExtensionAllowed}",
+                project.Id,
+                shot.Scene!.Index,
+                shot.Index,
+                shot.Id,
+                effectiveRenderDurationMode,
+                effectiveRenderDurationMode is RenderDurationMode.FastPreview or RenderDurationMode.CinematicPreview);
+        }
+        var durationSelection = SelectRenderDuration(effectiveRenderDurationMode, settings.frameNum, shot.DurationSeconds);
+        var renderSize = SelectRenderSize(effectiveRenderDurationMode, settings.size, logger, project.Id, shot.Scene!.Index, shot.Index, shot.Id);
+        var sampleSteps = SelectSampleSteps(effectiveRenderDurationMode, settings.sampleSteps);
         var renderJob = new RenderJob
         {
             ProjectId = project.Id,
@@ -833,7 +858,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
                 durationSelection.ActualFrameNum,
                 RenderDurationMaxFrameNum());
         }
-        if (renderDurationMode == RenderDurationMode.ComfyUIParity)
+        if (effectiveRenderDurationMode == RenderDurationMode.ComfyUIParity)
         {
             logger.LogInformation(
                 "wan_comfyui_parity_profile_selected projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} size={Size} requestedFrameNum={RequestedFrameNum} actualFrameNum={ActualFrameNum} sampleSteps={SampleSteps} cfg={Cfg} sampler={Sampler} scheduler={Scheduler} shift={Shift} expectedRawClipDurationSeconds={ExpectedRawClipDurationSeconds}",
@@ -1980,6 +2005,7 @@ static bool CompletedRenderSatisfiesRequestedMode(RenderJob job, RenderDurationM
 {
     return requestedMode switch
     {
+        RenderDurationMode.AutoQuality => job.RenderDurationMode is RenderDurationMode.LongMotion or RenderDurationMode.ComfyUIParity,
         RenderDurationMode.ComfyUIParity => job.RenderDurationMode == RenderDurationMode.ComfyUIParity,
         RenderDurationMode.LongMotion => job.RenderDurationMode is RenderDurationMode.LongMotion or RenderDurationMode.ComfyUIParity,
         _ => true
@@ -2439,6 +2465,43 @@ static int SelectSampleSteps(RenderDurationMode mode, int presetSampleSteps)
     return mode == RenderDurationMode.ComfyUIParity ? ComfyUIParitySampleSteps() : presetSampleSteps;
 }
 
+static RenderDurationMode ResolveRenderDurationMode(RenderDurationMode requestedMode, Shot shot)
+{
+    if (requestedMode != RenderDurationMode.AutoQuality)
+    {
+        return requestedMode;
+    }
+
+    if (Enum.TryParse<RenderDurationMode>(shot.RecommendedRenderDurationMode, true, out var recommended)
+        && recommended != RenderDurationMode.AutoQuality)
+    {
+        return recommended;
+    }
+
+    var text = $"{shot.ShotType} {shot.CameraMotion} {shot.Action}".ToLowerInvariant();
+    if (ContainsAny(text, "establishing", "wide", "arrival", "landscape", "approach"))
+    {
+        return RenderDurationMode.ComfyUIParity;
+    }
+
+    if (ContainsAny(text, "close", "emotion", "face", "dialogue", "look"))
+    {
+        return RenderDurationMode.LongMotion;
+    }
+
+    if (ContainsAny(text, "fight", "battle", "run", "chase", "explosion", "fast"))
+    {
+        return RenderDurationMode.CinematicPreview;
+    }
+
+    return shot.DurationSeconds >= 5 ? RenderDurationMode.LongMotion : RenderDurationMode.CinematicPreview;
+}
+
+static bool ContainsAny(string text, params string[] terms)
+{
+    return terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+}
+
 static RenderDurationSelection BuildDurationSelection(RenderDurationMode mode, int requestedShotDurationSeconds, int requestedFrameNum, int actualFrameNum)
 {
     return new RenderDurationSelection(
@@ -2512,7 +2575,7 @@ static double? ExpectedRawClipDurationSeconds(int? frameNum)
 }
 
 static int RenderDurationMaxFrameNum() => 121;
-static bool RequiresImageToVideoKeyframes(RenderDurationMode mode) => mode is RenderDurationMode.LongMotion or RenderDurationMode.ComfyUIParity;
+static bool RequiresImageToVideoKeyframes(RenderDurationMode mode) => mode is RenderDurationMode.LongMotion or RenderDurationMode.ComfyUIParity or RenderDurationMode.AutoQuality;
 static int ComfyUIParityFrameNum() => 161;
 static int ComfyUIParitySampleSteps() => 18;
 static string ComfyUIParitySupportedSize() => "1280*704";

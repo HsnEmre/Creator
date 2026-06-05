@@ -34,6 +34,66 @@ ComfyUI is not used anywhere in this pipeline.
    * Shots
    * Dialogue
    * Audio cues
+   * Director treatment
+   * Beat sheet and act breakdown
+   * Character bible and location bible
+   * Connected keyframe continuity prompts
+   * Render strategy recommendation
+
+### Director Continuity Planning
+
+Render profiles alone do not make a coherent film. A profile can change frame count, steps, or raw motion length, but it cannot decide whether scenes advance the story, whether characters remain visually stable, or whether keyframes connect from shot to shot. The planning pipeline therefore runs a director-style normalization pass before the storyboard is accepted.
+
+The director pass stores and returns:
+
+* `directorTreatment`: an expanded beginning, escalation, midpoint, climax, and resolution treatment.
+* `beatSheet`: one or more story beats tied to scene indexes.
+* `actBreakdown`: setup, escalation, and resolution ranges.
+* `characterBible`: stable identity locks for face, hair, age, costume, props, silhouette, forbidden drift, reference prompts, and negative drift prompts.
+* `locationBible`: stable location ids, visual descriptions, time of day, weather, architecture/materials, recurring props, and negative location drift.
+* `timelineContinuity`: scene-by-scene story state changes.
+* `visualContinuityRules`: global continuity rules for characters, locations, and keyframes.
+* `renderStrategyRecommendation`: the recommended quality goal and extension policy.
+
+Every scene also receives:
+
+* `purpose`
+* `storyStateBefore`
+* `storyStateAfter`
+* `locationId`
+* `sceneAnchorPrompt`
+* `locationContinuityPrompt`
+* `forbiddenLocationDrift`
+
+Every shot receives:
+
+* `involvedCharacterIds`
+* `characterLockPrompt`
+* `locationId`
+* `locationLockPrompt`
+* `forbiddenDriftTerms`
+* `previousShotVisualState`
+* `currentShotVisualState`
+* `nextShotSetup`
+* `keyframeContinuityPrompt`
+* `sceneAnchorPrompt`
+* `recommendedRenderDurationMode`
+* `assemblyExtensionAllowed`
+
+If Ollama returns a weak or incomplete plan, the API repairs it once deterministically and logs the validation/repair path. These logs are intentionally grep-friendly:
+
+* `director_plan_validation_started`
+* `director_plan_validation_failed`
+* `director_plan_repair_started`
+* `director_plan_repair_completed`
+* `director_plan_validation_completed`
+* `director_keyframe_continuity_started`
+* `director_keyframe_scene_anchor_created`
+* `director_keyframe_previous_state_applied`
+* `director_keyframe_image_reference_unavailable`
+* `director_keyframe_continuity_completed`
+
+The current SDXL still-image backend is text-conditioned. It does not yet use prior keyframe images as image references. The planner therefore logs that limitation and strengthens connected text prompts instead of pretending image-reference conditioning exists.
 
 5. Long-form plans are duration-validated before persistence. Ollama is prompted to create enough short shots, but the API also enforces deterministic guardrails so an undersized LLM response is repaired rather than silently accepted:
 
@@ -169,6 +229,7 @@ Future provider names such as `FLUX_DEV`, `FLUX_KONTEXT`, and `HIDREAM` are rese
 | `CinematicPreview` | uses `73` frames with the selected preset's sample steps | slower review clips with more visible motion |
 | `LongMotion` | derives frames from the shot target duration, normalizes to Wan-friendly `4n+1` counts, and clamps to `121` frames | slowest preview mode; intended for true generated motion rather than loop-stretched duration |
 | `ComfyUIParity` | uses `161` frames, `18` sample steps, CFG `5.0`, UniPC sampler, shift `8.0`, and the nearest Wan-supported TI2V size `1280*704` | closest direct-Wan approximation of the reference 5-6 second workflow; slowest and intended for consistency checks |
+| `AutoQuality` | resolves per shot to `CinematicPreview`, `LongMotion`, or `ComfyUIParity` from director intent | final-quality strategy selector; requires keyframes when the resolved shot mode needs Image-to-Video |
 
 The API logs duration-mode decisions when render jobs are created:
 
@@ -200,6 +261,15 @@ The Storyboard UI shows a large always-visible Render Profile selector in the St
 `ComfyUIParity` is the explicit profile for reproducing the user's working graph as closely as the current local Wan2.2 CLI allows without adding ComfyUI. The reference graph uses 1280x736, length 161, 24 fps, 18 steps, CFG 5.0, UniPC, simple scheduler, shift 8.0, VAE decode, and 24 fps save. Local Wan2.2 `ti2v-5B` supports `1280*704` and `704*1280`, not `1280*736`, so VideoStudio applies `1280*704` and logs the unsupported exact size. The Wan CLI supports `--sample_solver unipc`, `--sample_shift 8.0`, and `--sample_guide_scale 5.0`; it does not expose a separate scheduler or denoise argument, so those are logged as unsupported instead of silently invented.
 
 ComfyUI-style output is more consistent because it generates a direct 161-frame raw clip before saving. That is fundamentally different from creating a 25-frame FastPreview clip and later extending it during assembly. Assembly extension is useful for timing previews, but it is not a replacement for true generated motion.
+
+`AutoQuality` is not a new model path. The API resolves it per shot using the saved director recommendation and shot intent:
+
+* establishing/wide/arrival shots prefer `ComfyUIParity`
+* close emotional or dialogue shots prefer `LongMotion` or `ComfyUIParity`
+* fast action shots prefer `CinematicPreview` or `LongMotion`
+* atmospheric shots can use slower controlled motion
+
+When a resolved mode is `LongMotion` or `ComfyUIParity`, the existing Image-to-Video keyframe requirement is enforced before any render job is queued.
 
 For a 5-second shot in `LongMotion`, verify the queued/completed render metadata:
 
@@ -401,6 +471,8 @@ Do not change quality or offload defaults until diagnostics show the real bottle
 
 39b. LongMotion and ComfyUIParity are not allowed to fake long shots by severe loop/hold extension. The worker fails a LongMotion render if the probed raw output duration is below 75 percent of the target/expected raw duration. The worker fails a ComfyUIParity render if the probed raw output duration is below 75 percent of the expected 161-frame raw duration. During assembly, LongMotion and ComfyUIParity source clips must also cover at least 75 percent of their target shot duration or assembly fails with `ffmpeg_assembly_fake_duration_prevented`.
 
+39c. Final quality / AutoQuality follows the same no-fake-extension policy because AutoQuality resolves to existing strict modes for shots that need real raw motion. FastPreview remains allowed to extend for preview timing only.
+
 40. The worker validates final assembled duration against the sum of target shot durations. Tolerance is `max(2 seconds, 2 percent of total target duration)`. If a 180-second storyboard produces a 9.375-second output, the assembly job fails.
 
 41. The API and worker log:
@@ -493,6 +565,12 @@ The Storyboard UI shows the latest render state per shot:
 * warnings when the raw generated clip is shorter than the planned shot duration
 * LongMotion failures when raw output is too short and would require fake loop extension
 * ComfyUIParity metadata, including 161-frame request, expected raw duration, and probed raw duration
+* director plan status
+* story structure status
+* location continuity status
+* connected keyframe continuity status
+* render strategy recommendation
+* whether assembly extension is preview-only or blocked
 
 "Animate Selected" is the explicit regeneration path for the selected shot. "Animate Missing" sends all storyboard shot IDs with `force=false`, allowing the backend to skip completed or already-active shots. "Regenerate All" sends the same shot IDs with `force=true` for intentional full rerenders.
 

@@ -37,8 +37,19 @@ public sealed class VideoStudioDbContext(DbContextOptions<VideoStudioDbContext> 
         modelBuilder.Entity<RenderJob>().HasOne(j => j.DialogueLine).WithMany().HasForeignKey(j => j.DialogueLineId);
 
         modelBuilder.Entity<Project>().Property(p => p.Status).HasConversion<string>();
+        modelBuilder.Entity<Project>().Property(p => p.QualityGoal).HasDefaultValue("Balanced");
+        modelBuilder.Entity<Project>().Property(p => p.BeatSheetJson).HasDefaultValue("[]");
+        modelBuilder.Entity<Project>().Property(p => p.ActBreakdownJson).HasDefaultValue("[]");
+        modelBuilder.Entity<Project>().Property(p => p.CharacterBibleJson).HasDefaultValue("[]");
+        modelBuilder.Entity<Project>().Property(p => p.LocationBibleJson).HasDefaultValue("[]");
+        modelBuilder.Entity<Project>().Property(p => p.TimelineContinuityJson).HasDefaultValue("[]");
+        modelBuilder.Entity<Project>().Property(p => p.VisualContinuityRulesJson).HasDefaultValue("[]");
+        modelBuilder.Entity<Project>().Property(p => p.RenderStrategyRecommendationJson).HasDefaultValue("{}");
+        modelBuilder.Entity<Character>().Property(c => c.CharacterBibleJson).HasDefaultValue("{}");
         modelBuilder.Entity<Shot>().Property(s => s.Status).HasConversion<string>();
         modelBuilder.Entity<Shot>().Property(s => s.GenerationMode).HasConversion<string>();
+        modelBuilder.Entity<Shot>().Property(s => s.InvolvedCharacterIdsJson).HasDefaultValue("[]");
+        modelBuilder.Entity<Shot>().Property(s => s.AssemblyExtensionAllowed).HasDefaultValue(true);
         modelBuilder.Entity<RenderJob>().Property(j => j.Status).HasConversion<string>();
         modelBuilder.Entity<RenderJob>().Property(j => j.JobType).HasConversion<string>();
         modelBuilder.Entity<RenderJob>().Property(j => j.Preset).HasConversion<string>();

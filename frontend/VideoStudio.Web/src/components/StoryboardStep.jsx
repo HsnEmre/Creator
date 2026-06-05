@@ -85,7 +85,8 @@ const RENDER_PROFILES = [
   ["FastPreview", "FastPreview", "Fastest pipeline test"],
   ["CinematicPreview", "CinematicPreview", "More raw motion"],
   ["LongMotion", "LongMotion", "121 frames, slower motion"],
-  ["ComfyUIParity", "ComfyUIParity", "161 frames, 18 steps, closest parity"]
+  ["ComfyUIParity", "ComfyUIParity", "161 frames, 18 steps, closest parity"],
+  ["AutoQuality", "AutoQuality", "Director strategy per shot"]
 ];
 
 function RenderProfileSelector({ value, onChange, name = "renderDurationMode", className = "" }) {
@@ -349,7 +350,8 @@ function ShotInspector({
   const rawClipIsShort = Boolean(rawClipDurationSeconds && targetDurationSeconds && rawClipDurationSeconds + 0.5 < targetDurationSeconds);
   const isLongMotion = renderDurationMode === "LongMotion";
   const isComfyUIParity = renderDurationMode === "ComfyUIParity";
-  const requiresKeyframe = isLongMotion || isComfyUIParity;
+  const isAutoQuality = renderDurationMode === "AutoQuality";
+  const requiresKeyframe = isLongMotion || isComfyUIParity || isAutoQuality;
   const completedRenderMode = completedRender?.renderDurationMode || "FastPreview";
   const selectedProfileMissing = requiresKeyframe && completedRender && completedRenderMode !== renderDurationMode;
   const selectedProfileBlocked = requiresKeyframe && !hasKeyframe;
@@ -438,7 +440,9 @@ function ShotInspector({
         </p>
         {requiresKeyframe ? (
           <p className="msg compact-msg storyboard-longmotion-note">
-            {isComfyUIParity
+            {isAutoQuality
+              ? "AutoQuality chooses existing render profiles per shot from director intent. Final-quality choices require keyframes and must not fake long motion."
+              : isComfyUIParity
               ? "ComfyUIParity uses 161 frames, 18 steps, CFG 5.0, UniPC, and shift 8.0 where the Wan CLI supports them. It is the slowest/best consistency profile."
               : "LongMotion requires keyframes and attempts real longer raw motion. It is much slower."}
           </p>
@@ -565,7 +569,8 @@ export default function StoryboardStep({
   const selectedHasKeyframe = shotHasKeyframe(selectedShot);
   const isLongMotion = renderDurationMode === "LongMotion";
   const isComfyUIParity = renderDurationMode === "ComfyUIParity";
-  const requiresKeyframe = isLongMotion || isComfyUIParity;
+  const isAutoQuality = renderDurationMode === "AutoQuality";
+  const requiresKeyframe = isLongMotion || isComfyUIParity || isAutoQuality;
   const targetDurationSeconds = Number(summary.targetDurationSeconds || plan?.targetDurationSeconds || 0);
   const recommendLongMotion = targetDurationSeconds >= 60 && renderDurationMode !== "LongMotion";
   const blockStrictBulkRender = requiresKeyframe && missingKeyframeCount > 0;
@@ -613,7 +618,9 @@ export default function StoryboardStep({
           />
           {requiresKeyframe ? (
             <p className="msg compact-msg storyboard-longmotion-note">
-              {isComfyUIParity
+              {isAutoQuality
+                ? "AutoQuality follows the director render strategy per shot. It requires keyframes because final-quality choices use Image-to-Video and must not fake long motion."
+                : isComfyUIParity
                 ? "ComfyUIParity uses 161 frames, 18 steps, CFG 5.0, UniPC, and shift 8.0 where supported. It is closest to the reference workflow and is much slower."
                 : "LongMotion requires keyframes and attempts real longer raw motion. It is much slower."}
             </p>
@@ -685,6 +692,14 @@ export default function StoryboardStep({
 
       <section className={`storyboard-continuity-summary ${continuity.characterVisualLocksApplied === false ? "invalid" : ""}`}>
         <div>
+          <span className="muted">Director plan</span>
+          <b>{continuity.hasDirectorPlan ? "Ready" : "Needs analyze"}</b>
+        </div>
+        <div>
+          <span className="muted">Story structure</span>
+          <b>{continuity.storyStructureValid ? "Valid" : "Weak"}</b>
+        </div>
+        <div>
           <span className="muted">Character bible</span>
           <b>{continuity.hasContinuityBible ? "Ready" : "Needs analyze"}</b>
         </div>
@@ -703,6 +718,22 @@ export default function StoryboardStep({
         <div>
           <span className="muted">Keyframes</span>
           <b>{continuity.shotStartImageCount ?? 0}/{continuity.shotCount ?? shots.length}</b>
+        </div>
+        <div>
+          <span className="muted">Location continuity</span>
+          <b>{continuity.locationContinuityValid ? "Ready" : "Check"}</b>
+        </div>
+        <div>
+          <span className="muted">Keyframe continuity</span>
+          <b>{continuity.keyframeContinuityValid ? "Connected" : "Needs prompts"}</b>
+        </div>
+        <div>
+          <span className="muted">Render strategy</span>
+          <b>{continuity.renderStrategyName || "Manual"}</b>
+        </div>
+        <div>
+          <span className="muted">Assembly extension</span>
+          <b>{continuity.assemblyExtensionPolicy || "Preview-only when short"}</b>
         </div>
         <div>
           <span className="muted">I2V renders</span>

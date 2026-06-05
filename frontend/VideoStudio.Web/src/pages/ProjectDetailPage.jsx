@@ -637,6 +637,12 @@ export default function ProjectDetailPage() {
     (job) => job.jobTypeName === "RenderVideo" && isCompletedStatus(job.status) && String(job.generationModeName).toLowerCase() === "imagetovideo"
   ).length;
   const continuitySummary = {
+    hasDirectorPlan: visualPlan?.hasDirectorPlan ?? false,
+    storyStructureValid: visualPlan?.storyStructureValid ?? false,
+    locationContinuityValid: visualPlan?.locationContinuityValid ?? false,
+    keyframeContinuityValid: visualPlan?.keyframeContinuityValid ?? false,
+    renderStrategyName: visualPlan?.renderStrategyName || visualPlan?.renderStrategy?.name || "",
+    assemblyExtensionPolicy: visualPlan?.assemblyExtensionPolicy || visualPlan?.renderStrategy?.extensionPolicy || "",
     hasContinuityBible: visualPlan?.hasContinuityBible ?? false,
     characterVisualLocksApplied: visualPlan?.characterVisualLocksApplied ?? false,
     distinctNegativePromptCount: visualPlan?.distinctNegativePromptCount ?? 0,

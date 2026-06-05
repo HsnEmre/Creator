@@ -7,6 +7,7 @@ export default function ProjectsPage() {
   const [title, setTitle] = useState("");
   const [storyText, setStoryText] = useState("");
   const [targetDurationSeconds, setTargetDurationSeconds] = useState(60);
+  const [qualityGoal, setQualityGoal] = useState("Balanced");
   const [isSaving, setIsSaving] = useState(false);
   const [projects, setProjects] = useState([]);
   const [message, setMessage] = useState("");
@@ -24,7 +25,7 @@ export default function ProjectsPage() {
     setError("");
     setMessage("");
     try {
-      const project = await createProject({ title, storyText, targetDurationSeconds });
+      const project = await createProject({ title, storyText, targetDurationSeconds, qualityGoal });
       setMessage("Project created.");
       navigate(`/projects/${project.id}`);
     } catch (err) {
@@ -56,6 +57,15 @@ export default function ProjectsPage() {
               value={targetDurationSeconds}
               onChange={(e) => setTargetDurationSeconds(Number(e.target.value || 60))}
             />
+          </label>
+          <label>
+            Quality Goal
+            <select value={qualityGoal} onChange={(e) => setQualityGoal(e.target.value)}>
+              <option value="Fast test">Fast test</option>
+              <option value="Balanced">Balanced</option>
+              <option value="Final quality">Final quality</option>
+              <option value="Manual">Manual</option>
+            </select>
           </label>
           <label className="full">
             Story Text
