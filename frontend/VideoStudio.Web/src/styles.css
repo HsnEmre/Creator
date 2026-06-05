@@ -784,6 +784,35 @@ body {
   justify-content: flex-end;
 }
 
+.storyboard-header-render-controls {
+  display: grid;
+  gap: 10px;
+  min-width: min(100%, 520px);
+  padding: 12px;
+  border: 1px solid rgba(92, 197, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(8, 13, 20, 0.56);
+}
+
+.storyboard-header-render-controls h3 {
+  margin: 6px 0 0;
+  font-size: 24px;
+}
+
+.header-profile-options {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.storyboard-longmotion-note {
+  border: 1px solid rgba(255, 199, 95, 0.36);
+  background: rgba(255, 199, 95, 0.12);
+}
+
+.storyboard-longmotion-recommendation {
+  border: 1px solid rgba(92, 197, 255, 0.38);
+  background: rgba(92, 197, 255, 0.1);
+}
+
 .storyboard-keyframe-note {
   border: 1px solid rgba(255, 199, 95, 0.35);
   background: rgba(255, 199, 95, 0.1);
@@ -1632,6 +1661,7 @@ audio {
   .cast-explainer,
   .storyboard-editor-layout,
   .storyboard-shot-notes,
+  .header-profile-options,
   .edit-preview-grid,
   .edit-checklist {
     grid-template-columns: 1fr;

@@ -190,7 +190,15 @@ public sealed record PreproductionCharacterDto(Guid Id, string Name, string Role
 public sealed record PreproductionShotDto(Guid Id, Guid SceneId, int SceneIndex, int ShotIndex, string ShotType, string Action, string? StartImagePrompt, string? StartImageNegativePrompt, string StartImageStatus, string? StartImagePath, string? StartImageUrl, Guid? JobId, RenderJobStatus? JobStatus);
 public sealed record PreproductionDto(Guid ProjectId, string Title, List<PreproductionCharacterDto> Characters, List<PreproductionShotDto> Shots, List<string> MissingFields, List<string> Warnings);
 
-public sealed record RenderQueuedShotDto(Guid ShotId, int SceneIndex, int ShotIndex);
+public sealed record RenderQueuedShotDto(
+    Guid ShotId,
+    int SceneIndex,
+    int ShotIndex,
+    string? RenderDurationMode = null,
+    int? RequestedShotDurationSeconds = null,
+    int? RequestedFrameNum = null,
+    int? ActualFrameNum = null,
+    double? ExpectedRawClipDurationSeconds = null);
 public sealed record RenderQueuedDto(Guid ProjectId, int QueuedJobs, RenderPreset Preset, int MaxShots, List<RenderQueuedShotDto> Shots, int SkippedShots = 0, List<RenderQueuedShotDto>? Skipped = null);
 public sealed record RenderStatusDto(Guid ProjectId, ProjectStatus ProjectStatus, int TotalJobs, int Queued, int Rendering, int Completed, int Failed);
 public sealed record RenderJobDto(Guid Id, Guid ProjectId, Guid? SceneId, Guid? ShotId, int? SceneIndex, int? ShotIndex, Guid? CharacterId, Guid? DialogueLineId, RenderJobType JobType, RenderPreset Preset, VideoGenerationMode GenerationMode, string GenerationModeName, string Prompt, string? CompiledPrompt, string? NegativePrompt, string? Size, int? FrameNum, int? SampleSteps, int? Seed, string? InputImagePath, string? InputImageUrl, string? InputVideoPath, string? InputAudioPath, string? TextContent, string? Speaker, string? Emotion, string? Language, string? Voice, string? OutputPath, RenderJobStatus Status, int Progress, string? ErrorMessage, DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt, double? DurationSeconds, string? RenderDurationMode, int? RequestedShotDurationSeconds, int? RequestedFrameNum, int? ActualFrameNum, double? ExpectedRawClipDurationSeconds, double? ProbedRawClipDurationSeconds, int? RawDurationCoveragePercent);

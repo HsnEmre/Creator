@@ -324,6 +324,7 @@ export default function ProjectDetailPage() {
           preset: requestPayload.preset,
           maxShots: requestPayload.maxShots,
           shotIds: requestPayload.shotIds || [],
+          selectedShotId: requestPayload.shotIds?.[0] || null,
           useShotStartImage: requestPayload.useShotStartImage,
           renderDurationMode: requestPayload.renderDurationMode,
           useCharacterReferenceInPrompt: requestPayload.useCharacterReferenceInPrompt

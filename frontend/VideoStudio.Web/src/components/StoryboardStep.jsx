@@ -81,6 +81,32 @@ function latestLongMotionFailure(jobs) {
     .sort((a, b) => getJobTime(b) - getJobTime(a))[0] || null;
 }
 
+const RENDER_PROFILES = [
+  ["FastPreview", "FastPreview", "Fastest pipeline test"],
+  ["CinematicPreview", "CinematicPreview", "More raw motion"],
+  ["LongMotion", "LongMotion", "Slow, real longer motion"]
+];
+
+function RenderProfileSelector({ value, onChange, name = "renderDurationMode", className = "" }) {
+  return (
+    <div className={`segmented-control render-profile-options ${className}`} role="radiogroup" aria-label="Render duration profile">
+      {RENDER_PROFILES.map(([profileValue, label, help]) => (
+        <label key={profileValue} className={value === profileValue ? "selected" : ""}>
+          <input
+            type="radio"
+            name={name}
+            value={profileValue}
+            checked={value === profileValue}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          <span>{label}</span>
+          <small>{help}</small>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function getShotStatus(shot, jobs) {
   const renderJob = getLatestCompletedRender(jobs);
   if (renderJob) return "Rendered";
@@ -281,6 +307,7 @@ function ShotInspector({
   useCharacterReferenceInPrompt,
   hasAnyShotStartImage,
   durationPlanSummary,
+  missingKeyframeCount,
   isBusy,
   hasRunningRenderVideo,
   onUseShotStartImageChange,
@@ -319,6 +346,11 @@ function ShotInspector({
   const targetDurationSeconds = Number(shot.durationSeconds || shot.targetDurationSeconds || 0);
   const rawClipDurationSeconds = rawClipSecondsFromJob(completedRender);
   const rawClipIsShort = Boolean(rawClipDurationSeconds && targetDurationSeconds && rawClipDurationSeconds + 0.5 < targetDurationSeconds);
+  const isLongMotion = renderDurationMode === "LongMotion";
+  const completedRenderMode = completedRender?.renderDurationMode || "FastPreview";
+  const selectedLongMotionMissing = isLongMotion && completedRender && completedRenderMode !== "LongMotion";
+  const selectedLongMotionBlocked = isLongMotion && !hasKeyframe;
+  const animateMissingBlocked = isLongMotion && missingKeyframeCount > 0;
 
   return (
     <aside className="storyboard-inspector">
@@ -393,28 +425,25 @@ function ShotInspector({
 
       <div className="storyboard-inspector-section">
         <h3>Render Profile</h3>
-        <div className="segmented-control render-profile-options" role="radiogroup" aria-label="Render duration profile">
-          {[
-            ["FastPreview", "FastPreview", "Fastest, short motion clips"],
-            ["CinematicPreview", "CinematicPreview", "Slower, more motion"],
-            ["LongMotion", "LongMotion", "Slowest, tries to match shot duration"]
-          ].map(([value, label, help]) => (
-            <label key={value} className={renderDurationMode === value ? "selected" : ""}>
-              <input
-                type="radio"
-                name="renderDurationMode"
-                value={value}
-                checked={renderDurationMode === value}
-                onChange={(event) => onRenderDurationModeChange(event.target.value)}
-              />
-              <span>{label}</span>
-              <small>{help}</small>
-            </label>
-          ))}
-        </div>
+        <RenderProfileSelector
+          value={renderDurationMode}
+          onChange={onRenderDurationModeChange}
+          name="renderDurationModeInspector"
+        />
         <p className="muted">
           FastPreview creates about a 1 second raw clip. Assembly can extend it to the shot timing, but that is not true generated long motion.
         </p>
+        {isLongMotion ? (
+          <p className="msg compact-msg storyboard-longmotion-note">
+            LongMotion requires keyframes and attempts real longer raw motion. It is much slower.
+          </p>
+        ) : null}
+        {selectedLongMotionBlocked ? (
+          <p className="msg error compact-msg">Generate keyframes before LongMotion render.</p>
+        ) : null}
+        {selectedLongMotionMissing ? (
+          <p className="msg error compact-msg">This shot only has a {completedRenderMode} render. LongMotion render is still missing.</p>
+        ) : null}
       </div>
 
       <div className="storyboard-inspector-section">
@@ -423,18 +452,19 @@ function ShotInspector({
           <button type="button" disabled={isBusy} onClick={() => onGenerateShotStartImage(shot.id)}>
             Regenerate Keyframe
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={() => onAnimateSelected(shot)}>
-            Animate Selected
+          <button type="button" disabled={isBusy || hasRunningRenderVideo || selectedLongMotionBlocked} onClick={() => onAnimateSelected(shot)}>
+            Animate Selected ({renderDurationMode})
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onAnimateAll}>
-            Animate Missing Shots
+          <button type="button" disabled={isBusy || hasRunningRenderVideo || animateMissingBlocked} onClick={onAnimateAll}>
+            Animate Missing ({renderDurationMode})
           </button>
           {onRegenerateAll ? (
-            <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onRegenerateAll}>
-              Regenerate All
+            <button type="button" disabled={isBusy || hasRunningRenderVideo || animateMissingBlocked} onClick={onRegenerateAll}>
+              Regenerate All ({renderDurationMode})
             </button>
           ) : null}
           <small className="muted">Animate Missing skips shots with completed renders. Regenerate All queues every shot again.</small>
+          {animateMissingBlocked ? <small className="msg error compact-msg">{missingKeyframeCount} shot(s) need keyframes before LongMotion can queue all missing renders.</small> : null}
         </div>
       </div>
 
@@ -524,6 +554,15 @@ export default function StoryboardStep({
   const missingRenderCount = Math.max(0, shots.length - completedShotCount);
   const summary = durationPlanSummary || {};
   const continuity = continuitySummary || {};
+  const shotHasKeyframe = (shot) => Boolean(shot?.startImageUrl || shot?.startImagePath);
+  const keyframeReadyCount = shots.filter(shotHasKeyframe).length;
+  const missingKeyframeCount = Math.max(0, shots.length - keyframeReadyCount);
+  const selectedHasKeyframe = shotHasKeyframe(selectedShot);
+  const isLongMotion = renderDurationMode === "LongMotion";
+  const targetDurationSeconds = Number(summary.targetDurationSeconds || plan?.targetDurationSeconds || 0);
+  const recommendLongMotion = targetDurationSeconds >= 60 && renderDurationMode !== "LongMotion";
+  const blockLongMotionBulkRender = isLongMotion && missingKeyframeCount > 0;
+  const blockLongMotionSelectedRender = isLongMotion && selectedShot && !selectedHasKeyframe;
 
   if (!plan) {
     return (
@@ -551,16 +590,45 @@ export default function StoryboardStep({
           <h2>Review keyframes and animate shots</h2>
           <p>Choose a shot, refine its keyframe prompt, then animate selected shots through the existing render queue.</p>
         </div>
+        <div className="storyboard-header-render-controls">
+          <div className="row">
+            <div>
+              <span className="badge">Render Profile</span>
+              <h3>{renderDurationMode}</h3>
+            </div>
+            <span className="badge">{keyframeReadyCount}/{shots.length} keyframes</span>
+          </div>
+          <RenderProfileSelector
+            value={renderDurationMode}
+            onChange={onRenderDurationModeChange}
+            name="renderDurationModeHeader"
+            className="header-profile-options"
+          />
+          {isLongMotion ? (
+            <p className="msg compact-msg storyboard-longmotion-note">
+              LongMotion requires keyframes and attempts real longer raw motion. It is much slower.
+            </p>
+          ) : null}
+          {recommendLongMotion ? (
+            <p className="msg compact-msg storyboard-longmotion-recommendation">For final-quality film render, select LongMotion.</p>
+          ) : null}
+          {blockLongMotionBulkRender ? (
+            <p className="msg error compact-msg">Generate keyframes before LongMotion render. {missingKeyframeCount} shot(s) are missing keyframes.</p>
+          ) : null}
+          {blockLongMotionSelectedRender ? (
+            <p className="msg error compact-msg">The selected shot needs a keyframe before Animate Selected ({renderDurationMode}).</p>
+          ) : null}
+        </div>
         <div className="storyboard-head-actions">
           <button type="button" disabled={isBusy || !plan} onClick={onGenerateShotStartImages}>
             Generate Keyframes
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onAnimateAll}>
-            Animate Missing
+          <button type="button" disabled={isBusy || hasRunningRenderVideo || blockLongMotionBulkRender} onClick={onAnimateAll}>
+            Animate Missing ({renderDurationMode})
           </button>
           {onRegenerateAll ? (
-            <button type="button" disabled={isBusy || hasRunningRenderVideo} onClick={onRegenerateAll}>
-              Regenerate All
+            <button type="button" disabled={isBusy || hasRunningRenderVideo || blockLongMotionBulkRender} onClick={onRegenerateAll}>
+              Regenerate All ({renderDurationMode})
             </button>
           ) : null}
         </div>
@@ -654,6 +722,7 @@ export default function StoryboardStep({
           renderDurationMode={renderDurationMode}
           useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
           hasAnyShotStartImage={hasAnyShotStartImage}
+          missingKeyframeCount={missingKeyframeCount}
           isBusy={isBusy}
           hasRunningRenderVideo={hasRunningRenderVideo}
           onUseShotStartImageChange={onUseShotStartImageChange}

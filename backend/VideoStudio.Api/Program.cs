@@ -66,6 +66,8 @@ if (app.Environment.IsDevelopment())
     app.UseCors("LocalFrontend");
 }
 
+await LogRenderJobDurationMetadataSchemaAsync(app.Services, app.Logger);
+
 app.MapPost("/api/projects", async (CreateProjectRequest request, VideoStudioDbContext db) =>
 {
     var title = string.IsNullOrWhiteSpace(request.Title) ? request.Name : request.Title;
@@ -611,6 +613,18 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
     var settings = GetPresetSettings(preset);
     var hasExplicitTarget = request?.ShotIds?.Count > 0 || request?.SceneIndex is not null || request?.ShotIndex is not null;
     var limitedShots = hasExplicitTarget ? shots : shots.Take(maxShots).ToList();
+    if (renderDurationMode == RenderDurationMode.LongMotion && !useShotStartImage)
+    {
+        logger.LogWarning(
+            "longmotion_i2v_required projectId={ProjectId} shotCount={ShotCount}",
+            project.Id,
+            limitedShots.Count);
+        return Results.BadRequest(new
+        {
+            error = "LongMotion requires Image-to-Video from shot keyframes. Enable useShotStartImage and generate or upload keyframes before queueing LongMotion renders."
+        });
+    }
+
     if (renderDurationMode == RenderDurationMode.LongMotion && useShotStartImage)
     {
         logger.LogInformation(
@@ -819,7 +833,15 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
                 inputImagePath);
         }
         jobs.Add(renderJob);
-        queuedShotDtos.Add(new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index));
+        queuedShotDtos.Add(new RenderQueuedShotDto(
+            shot.Id,
+            shot.Scene!.Index,
+            shot.Index,
+            durationSelection.Mode.ToString(),
+            durationSelection.RequestedShotDurationSeconds,
+            durationSelection.RequestedFrameNum,
+            durationSelection.ActualFrameNum,
+            durationSelection.ExpectedRawClipDurationSeconds));
     }
 
     if (jobs.Count == 0)
@@ -2137,6 +2159,89 @@ static string GetMediaContentType(string extension)
         ".webp" => "image/webp",
         _ => "application/octet-stream"
     };
+}
+
+static async Task LogRenderJobDurationMetadataSchemaAsync(IServiceProvider services, ILogger logger)
+{
+    using var scope = services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<VideoStudioDbContext>();
+    var expectedColumns = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["RenderDurationMode"] = ["nvarchar"],
+        ["RequestedShotDurationSeconds"] = ["int"],
+        ["RequestedFrameNum"] = ["int"],
+        ["ActualFrameNum"] = ["int"],
+        ["ExpectedRawClipDurationSeconds"] = ["float", "real"],
+        ["ProbedRawClipDurationSeconds"] = ["float", "real"],
+        ["RawDurationCoveragePercent"] = ["int"]
+    };
+
+    try
+    {
+        var connection = db.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            await connection.OpenAsync();
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COLUMN_NAME, DATA_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = 'RenderJobs'
+              AND COLUMN_NAME IN (
+                'RenderDurationMode',
+                'RequestedShotDurationSeconds',
+                'RequestedFrameNum',
+                'ActualFrameNum',
+                'ExpectedRawClipDurationSeconds',
+                'ProbedRawClipDurationSeconds',
+                'RawDurationCoveragePercent'
+              )
+            """;
+
+        var actualColumns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            actualColumns[reader.GetString(0)] = reader.GetString(1);
+        }
+
+        var problems = expectedColumns
+            .Select(expected =>
+            {
+                if (!actualColumns.TryGetValue(expected.Key, out var actualType))
+                {
+                    return $"{expected.Key}=missing";
+                }
+
+                return expected.Value.Contains(actualType, StringComparer.OrdinalIgnoreCase)
+                    ? null
+                    : $"{expected.Key}=actual:{actualType},expected:{string.Join("|", expected.Value)}";
+            })
+            .Where(problem => problem is not null)
+            .ToList();
+
+        if (problems.Count > 0)
+        {
+            logger.LogError(
+                "renderjob_duration_metadata_schema_invalid table=RenderJobs problems={Problems} action={Action}",
+                string.Join(",", problems),
+                "Run EF migrations manually; startup will not delete data or run destructive migrations.");
+            return;
+        }
+
+        logger.LogInformation(
+            "renderjob_duration_metadata_schema_valid table=RenderJobs columns={Columns}",
+            string.Join(",", actualColumns.Select(column => $"{column.Key}:{column.Value}")));
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(
+            ex,
+            "renderjob_duration_metadata_schema_check_failed action={Action}",
+            "Could not verify RenderJobs duration metadata column types; ensure SQL Server is reachable and migrations are applied.");
+    }
 }
 
 static string ResolveStorageRoot(string storageRootConfig)

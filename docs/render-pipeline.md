@@ -190,6 +190,19 @@ Render duration metadata is stored on every video `RenderJob`:
 
 The worker probes completed raw video duration with FFprobe and reports it back to the API when completing a video render job.
 
+The Storyboard UI shows a large always-visible Render Profile selector in the Storyboard header next to the keyframe and animate actions. The same mode is reflected in the inspector, but the header selector is the primary control before using `Animate Missing` or `Regenerate All`.
+
+`FastPreview` is for speed only. It is useful for pipeline checks and quick visual iteration, but it produces about one second of raw motion at the current 25-frame setting. Assembly can duration-lock that clip to the storyboard timing, but extension/hold/looping is not a substitute for true generated motion.
+
+`LongMotion` is required when the goal is real longer raw motion. It requires shot start images/keyframes for continuity. When `LongMotion` is selected with Image-to-Video, the API blocks queueing if any selected shot is missing a keyframe instead of silently falling back to Text-to-Video.
+
+For a 5-second shot in `LongMotion`, verify the queued/completed render metadata:
+
+* `renderDurationMode=LongMotion`
+* `actualFrameNum=121` at the current safe local ceiling
+* `expectedRawClipDurationSeconds` near `5.0`
+* `probedRawClipDurationSeconds` around `5s` after FFprobe completion
+
 14. `maxShots`, `sceneIndex`, and `shotIndex` can limit queueing to a subset for quick iteration.
 
 15. Render targeting supports:
