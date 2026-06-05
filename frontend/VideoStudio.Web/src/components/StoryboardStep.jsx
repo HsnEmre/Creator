@@ -63,6 +63,9 @@ function formatDuration(seconds) {
 }
 
 function rawClipSecondsFromJob(job) {
+  if (job?.probedRawClipDurationSeconds !== undefined && job?.probedRawClipDurationSeconds !== null) {
+    return Number(job.probedRawClipDurationSeconds);
+  }
   if (job?.expectedRawClipDurationSeconds !== undefined && job?.expectedRawClipDurationSeconds !== null) {
     return Number(job.expectedRawClipDurationSeconds);
   }
@@ -70,6 +73,12 @@ function rawClipSecondsFromJob(job) {
     return Number(job.actualFrameNum || job.frameNum) / 24;
   }
   return null;
+}
+
+function latestLongMotionFailure(jobs) {
+  return (jobs || [])
+    .filter((job) => isRenderVideoJob(job) && String(job.renderDurationMode).toLowerCase() === "longmotion" && String(statusLabel(job.status)).toLowerCase() === "failed")
+    .sort((a, b) => getJobTime(b) - getJobTime(a))[0] || null;
 }
 
 function getShotStatus(shot, jobs) {
@@ -304,6 +313,7 @@ function ShotInspector({
 
   const runningJob = jobs.find(isRunningJob);
   const completedRender = getLatestCompletedRender(jobs);
+  const longMotionFailure = latestLongMotionFailure(jobs);
   const hasKeyframe = Boolean(shot.startImageUrl || shot.startImagePath);
   const characters = shot.requiredCharacters || shot.sceneRequiredCharacters || [];
   const targetDurationSeconds = Number(shot.durationSeconds || shot.targetDurationSeconds || 0);
@@ -442,6 +452,10 @@ function ShotInspector({
               <b>{targetDurationSeconds ? formatDuration(targetDurationSeconds) : "Not available"}</b>
               <span>Raw generated clip</span>
               <b>{rawClipDurationSeconds ? formatDuration(rawClipDurationSeconds) : "Unknown"}</b>
+              <span>Render mode</span>
+              <b>{completedRender.renderDurationMode || "FastPreview"}</b>
+              <span>Frames</span>
+              <b>{completedRender.actualFrameNum || completedRender.frameNum || "Unknown"} / requested {completedRender.requestedFrameNum || "Unknown"}</b>
               <span>Assembly timing</span>
               <b>{targetDurationSeconds ? formatDuration(targetDurationSeconds) : "Not available"}</b>
             </div>
@@ -451,6 +465,12 @@ function ShotInspector({
               </p>
             ) : null}
           </>
+        ) : null}
+        {longMotionFailure ? (
+          <p className="msg error compact-msg">
+            LongMotion failed: raw render is too short. This shot was not accepted because it would require fake loop extension.
+            {longMotionFailure.errorMessage ? ` ${longMotionFailure.errorMessage}` : ""}
+          </p>
         ) : null}
         {!runningJob && !completedRender ? <p className="muted">No render job for this shot yet.</p> : null}
       </div>
@@ -664,6 +684,9 @@ export default function StoryboardStep({
                   </a>
                 ) : null}
                 {job.durationSeconds ? <p className="muted">Duration: {formatDuration(job.durationSeconds)}</p> : null}
+                <p className="muted">
+                  Mode: {job.renderDurationMode || "FastPreview"} | target {formatDuration(job.requestedShotDurationSeconds) || "n/a"} | frames {job.actualFrameNum || job.frameNum || "n/a"} / requested {job.requestedFrameNum || "n/a"} | raw {formatDuration(rawClipSecondsFromJob(job)) || "unknown"}
+                </p>
                 {job.errorMessage ? <p className="msg error">{job.errorMessage}</p> : null}
               </div>
             ))

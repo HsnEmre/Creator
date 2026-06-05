@@ -22,8 +22,11 @@ class ApiClient:
         _, data = self._request("POST", f"/api/worker/jobs/{job_id}/start")
         return data
 
-    def complete_job(self, job_id: str, output_path: str) -> dict:
-        _, data = self._request("POST", f"/api/worker/jobs/{job_id}/complete", {"outputPath": output_path})
+    def complete_job(self, job_id: str, output_path: str, probed_raw_clip_duration_seconds: Optional[float] = None) -> dict:
+        body = {"outputPath": output_path}
+        if probed_raw_clip_duration_seconds is not None:
+            body["probedRawClipDurationSeconds"] = probed_raw_clip_duration_seconds
+        _, data = self._request("POST", f"/api/worker/jobs/{job_id}/complete", body)
         return data
 
     def fail_job(self, job_id: str, error_message: str) -> dict:

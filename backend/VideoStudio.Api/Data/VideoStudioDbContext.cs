@@ -42,6 +42,7 @@ public sealed class VideoStudioDbContext(DbContextOptions<VideoStudioDbContext> 
         modelBuilder.Entity<RenderJob>().Property(j => j.Status).HasConversion<string>();
         modelBuilder.Entity<RenderJob>().Property(j => j.JobType).HasConversion<string>();
         modelBuilder.Entity<RenderJob>().Property(j => j.Preset).HasConversion<string>();
+        modelBuilder.Entity<RenderJob>().Property(j => j.RenderDurationMode).HasConversion<string>();
         modelBuilder.Entity<RenderJob>().Property(j => j.GenerationMode).HasConversion<string>();
         modelBuilder.Entity<Asset>().Property(a => a.Type).HasConversion<string>();
 

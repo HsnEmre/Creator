@@ -106,12 +106,14 @@ class FFmpegService:
                 source_duration = source_durations[index]
                 segment_output = str(Path(temp_dir.name) / f"segment_{index + 1:04d}.mp4")
                 segment_paths.append(segment_output)
+                self._validate_extension_policy(segment, source_duration)
                 log_perf(
                     "ffmpeg_assembly_selected_shot",
                     scene_index=segment.get("scene_index"),
                     shot_index=segment.get("shot_index"),
                     shot_id=segment.get("shot_id"),
                     render_job_id=segment.get("render_job_id"),
+                    render_duration_mode=segment.get("render_duration_mode"),
                     video_path=segment["video_path"],
                     source_duration_seconds=source_duration,
                     target_duration_seconds=segment["target_duration_seconds"],
@@ -333,13 +335,81 @@ class FFmpegService:
 
         return {
             "video_path": str(video_path),
+            "project_id": segment.get("projectId") or segment.get("project_id"),
             "target_duration_seconds": target_duration_seconds,
             "shot_id": segment.get("shotId") or segment.get("shot_id"),
             "scene_id": segment.get("sceneId") or segment.get("scene_id"),
             "scene_index": segment.get("sceneIndex") or segment.get("scene_index"),
             "shot_index": segment.get("shotIndex") or segment.get("shot_index"),
             "render_job_id": segment.get("renderJobId") or segment.get("render_job_id"),
+            "render_duration_mode": segment.get("renderDurationMode") or segment.get("render_duration_mode") or "FastPreview",
+            "expected_raw_clip_duration_seconds": segment.get("expectedRawClipDurationSeconds") or segment.get("expected_raw_clip_duration_seconds"),
+            "probed_raw_clip_duration_seconds": segment.get("probedRawClipDurationSeconds") or segment.get("probed_raw_clip_duration_seconds"),
+            "raw_duration_coverage_percent": segment.get("rawDurationCoveragePercent") or segment.get("raw_duration_coverage_percent"),
         }
+
+    @staticmethod
+    def _validate_extension_policy(segment: Dict[str, Any], source_duration: Optional[float]) -> None:
+        mode = str(segment.get("render_duration_mode") or "FastPreview")
+        target_duration = float(segment["target_duration_seconds"])
+        ratio = (source_duration / target_duration) if source_duration is not None and target_duration > 0 else 0.0
+        if mode == "LongMotion":
+            policy = "fail_severe_extension"
+        elif mode == "CinematicPreview":
+            policy = "allow_with_warning"
+        else:
+            policy = "allow_preview_extension"
+        log_perf(
+            "ffmpeg_assembly_extension_policy_selected",
+            project_id=segment.get("project_id"),
+            shot_id=segment.get("shot_id"),
+            render_job_id=segment.get("render_job_id"),
+            render_duration_mode=mode,
+            source_duration_seconds=source_duration,
+            target_shot_duration_seconds=target_duration,
+            extension_ratio=round(ratio, 3),
+            policy=policy,
+        )
+        if mode != "LongMotion" or ratio >= 0.75:
+            return
+        log_perf(
+            "ffmpeg_assembly_source_too_short_for_longmotion",
+            project_id=segment.get("project_id"),
+            shot_id=segment.get("shot_id"),
+            render_job_id=segment.get("render_job_id"),
+            render_duration_mode=mode,
+            source_duration_seconds=source_duration,
+            target_shot_duration_seconds=target_duration,
+            extension_ratio=round(ratio, 3),
+            policy=policy,
+        )
+        log_perf(
+            "ffmpeg_assembly_severe_extension_blocked",
+            project_id=segment.get("project_id"),
+            shot_id=segment.get("shot_id"),
+            render_job_id=segment.get("render_job_id"),
+            render_duration_mode=mode,
+            source_duration_seconds=source_duration,
+            target_shot_duration_seconds=target_duration,
+            extension_ratio=round(ratio, 3),
+            policy=policy,
+        )
+        log_perf(
+            "ffmpeg_assembly_fake_duration_prevented",
+            project_id=segment.get("project_id"),
+            shot_id=segment.get("shot_id"),
+            render_job_id=segment.get("render_job_id"),
+            render_duration_mode=mode,
+            source_duration_seconds=source_duration,
+            target_shot_duration_seconds=target_duration,
+            extension_ratio=round(ratio, 3),
+            policy=policy,
+        )
+        raise RuntimeError(
+            "LongMotion source clip is too short for duration-locked assembly. "
+            f"source={source_duration or 0:.3f}s target={target_duration:.3f}s ratio={ratio:.3f}. "
+            "Refusing to create fake loop-stretched long motion."
+        )
 
     @staticmethod
     def _is_audio_shorter(video_duration: Optional[float], audio_duration: Optional[float]) -> bool:

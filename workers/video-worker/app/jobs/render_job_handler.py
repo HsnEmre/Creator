@@ -152,7 +152,7 @@ class RenderJobHandler:
             self.api.update_progress(job_id, 90)
             if result.success:
                 self.api.update_progress(job_id, 100)
-                self.api.complete_job(job_id, result.output_path or "")
+                self.api.complete_job(job_id, result.output_path or "", result.probed_raw_clip_duration_seconds)
             else:
                 self.api.fail_job(job_id, result.error_message or "Render failed.")
         except Exception as exc:
@@ -201,7 +201,7 @@ class RenderJobHandler:
         return job_type
 
     def _render_context(self, request: RenderRequest) -> dict:
-        frame_count = request.frame_num or self.settings.wan22_default_frame_num
+        frame_count = request.actual_frame_num or request.frame_num or self.settings.wan22_default_frame_num
         output_resolution = request.size or self.settings.wan22_default_size
         sample_steps = request.sample_steps or self.settings.wan22_default_sample_steps
         return {
@@ -216,6 +216,13 @@ class RenderJobHandler:
             "t5_cpu": self.settings.wan22_default_t5_cpu,
             "wan_torch_optimize": self.settings.wan22_torch_optimize,
             "wan_persistent_pipeline": self.settings.wan22_persistent_pipeline,
+            "render_duration_mode": request.render_duration_mode or "FastPreview",
+            "target_shot_duration_seconds": request.requested_shot_duration_seconds,
+            "requested_frame_num": request.requested_frame_num,
+            "actual_frame_num": request.actual_frame_num,
+            "expected_raw_clip_duration_seconds": request.expected_raw_clip_duration_seconds,
+            "probed_raw_clip_duration_seconds": request.probed_raw_clip_duration_seconds,
+            "raw_duration_coverage_percent": request.raw_duration_coverage_percent,
         }
 
     def _maybe_unload_image_pipeline(self, job_id: str, project_id: str, job_type: str) -> None:

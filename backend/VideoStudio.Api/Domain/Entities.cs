@@ -145,11 +145,18 @@ public sealed class RenderJob
     public DialogueLine? DialogueLine { get; set; }
     public RenderJobType JobType { get; set; } = RenderJobType.ShotRender;
     public RenderPreset Preset { get; set; } = RenderPreset.FastPreview;
+    public RenderDurationMode RenderDurationMode { get; set; } = RenderDurationMode.FastPreview;
     public VideoGenerationMode GenerationMode { get; set; } = VideoGenerationMode.TextToVideo;
     public string? Size { get; set; }
     public int? FrameNum { get; set; }
     public int? SampleSteps { get; set; }
     public int? Seed { get; set; }
+    public int? RequestedShotDurationSeconds { get; set; }
+    public int? RequestedFrameNum { get; set; }
+    public int? ActualFrameNum { get; set; }
+    public double? ExpectedRawClipDurationSeconds { get; set; }
+    public double? ProbedRawClipDurationSeconds { get; set; }
+    public int? RawDurationCoveragePercent { get; set; }
     public string? CompiledPrompt { get; set; }
     public string Prompt { get; set; } = string.Empty;
     public string? NegativePrompt { get; set; }

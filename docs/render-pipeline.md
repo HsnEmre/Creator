@@ -167,7 +167,7 @@ Future provider names such as `FLUX_DEV`, `FLUX_KONTEXT`, and `HIDREAM` are rese
 | ------------- | --------------- | ------------ |
 | `FastPreview` | uses the preset frame count, currently `25` for FastPreview | fastest pipeline validation; raw motion is about one second at 24fps |
 | `CinematicPreview` | uses `73` frames with the selected preset's sample steps | slower review clips with more visible motion |
-| `LongMotion` | derives frames from the shot target duration, normalizes to Wan-friendly `4n+1` counts, and clamps to `121` frames | slowest preview mode; tries to approach shot timing without changing global quality defaults |
+| `LongMotion` | derives frames from the shot target duration, normalizes to Wan-friendly `4n+1` counts, and clamps to `121` frames | slowest preview mode; intended for true generated motion rather than loop-stretched duration |
 
 The API logs duration-mode decisions when render jobs are created:
 
@@ -177,6 +177,18 @@ The API logs duration-mode decisions when render jobs are created:
 * `wan_render_expected_duration`
 
 These logs include project, scene, shot, render job id, target shot duration, requested frame count, actual frame count, and expected raw clip duration.
+
+Render duration metadata is stored on every video `RenderJob`:
+
+* `renderDurationMode`
+* `requestedShotDurationSeconds`
+* `requestedFrameNum`
+* `actualFrameNum`
+* `expectedRawClipDurationSeconds`
+* `probedRawClipDurationSeconds`
+* `rawDurationCoveragePercent`
+
+The worker probes completed raw video duration with FFprobe and reports it back to the API when completing a video render job.
 
 14. `maxShots`, `sceneIndex`, and `shotIndex` can limit queueing to a subset for quick iteration.
 
@@ -245,6 +257,8 @@ When `force=false` or omitted, render creation skips shots that already have an 
 30. For image-to-video jobs, the Python Wan2.2 TI2V adapter passes `--image {inputImagePath}` to `generate.py` while keeping the same `ti2v-5B` task.
 
 31. If only character references exist and no shot start image exists, the render remains `TextToVideo`.
+
+31b. LongMotion is stricter than preview modes. If `LongMotion` is requested with `useShotStartImage=true`, every selected shot must have a valid shot start image before the API queues render jobs. Missing keyframes are blocked with a clear error instead of silently falling back to Text-to-Video. The worker also verifies that an Image-to-Video start image path exists before invoking Wan2.2.
 
 31a. Render-job creation logs the active image-conditioning path:
 
@@ -358,6 +372,8 @@ Do not change quality or offload defaults until diagnostics show the real bottle
 
 39a. Use `CinematicPreview` or `LongMotion` when the raw generated clip should contain more real motion before assembly. Assembly still uses the latest valid render per shot and still duration-locks segments to the storyboard timing; it does not turn a one-second FastPreview into true long generated motion.
 
+39b. LongMotion is not allowed to fake long shots by severe loop/hold extension. The worker fails a LongMotion render if the probed raw output duration is below 75 percent of the target/expected raw duration. During assembly, LongMotion source clips must also cover at least 75 percent of their target shot duration or assembly fails with `ffmpeg_assembly_fake_duration_prevented`.
+
 40. The worker validates final assembled duration against the sum of target shot durations. Tolerance is `max(2 seconds, 2 percent of total target duration)`. If a 180-second storyboard produces a 9.375-second output, the assembly job fails.
 
 41. The API and worker log:
@@ -365,8 +381,12 @@ Do not change quality or offload defaults until diagnostics show the real bottle
    * `ffmpeg_assembly_plan_validation_started`
    * `ffmpeg_assembly_plan_validation_failed`
    * `ffmpeg_assembly_plan_validation_completed`
-   * `ffmpeg_assembly_selected_shot`
-   * `ffmpeg_assembly_segment_normalized`
+* `ffmpeg_assembly_selected_shot`
+* `ffmpeg_assembly_extension_policy_selected`
+* `ffmpeg_assembly_source_too_short_for_longmotion`
+* `ffmpeg_assembly_severe_extension_blocked`
+* `ffmpeg_assembly_fake_duration_prevented`
+* `ffmpeg_assembly_segment_normalized`
    * `ffmpeg_assembly_duration_plan`
    * `ffmpeg_assembly_output_duration_validation_failed`
    * `ffmpeg_assembly_output_duration_validation_completed`
@@ -444,6 +464,7 @@ The Storyboard UI shows the latest render state per shot:
 * selected render duration mode
 * expected raw generated clip duration when frame metadata is available
 * warnings when the raw generated clip is shorter than the planned shot duration
+* LongMotion failures when raw output is too short and would require fake loop extension
 
 "Animate Selected" is the explicit regeneration path for the selected shot. "Animate Missing" sends all storyboard shot IDs with `force=false`, allowing the backend to skip completed or already-active shots. "Regenerate All" sends the same shot IDs with `force=true` for intentional full rerenders.
 
@@ -455,6 +476,8 @@ Future work:
 * deeper image-conditioned character reference support only if the architecture later supports it
 * IP-Adapter-like or reference-conditioning workflows only through Python worker adapters, never through ComfyUI
 * richer plan versioning for preserving multiple storyboard generations side-by-side
+
+Character references alone are prompt guidance. Stronger character consistency requires shot keyframes/Image-to-Video or future real reference-conditioning adapters. The UI and logs should stay honest when a render is prompt-only.
 
 ---
 

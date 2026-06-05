@@ -310,6 +310,9 @@ namespace VideoStudio.Api.Migrations
                     b.Property<Guid?>("CharacterId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("ActualFrameNum")
+                        .HasColumnType("int");
+
                     b.Property<string>("CompiledPrompt")
                         .HasColumnType("nvarchar(max)");
 
@@ -324,6 +327,9 @@ namespace VideoStudio.Api.Migrations
 
                     b.Property<string>("ErrorMessage")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<double?>("ExpectedRawClipDurationSeconds")
+                        .HasColumnType("float");
 
                     b.Property<DateTimeOffset?>("FinishedAt")
                         .HasColumnType("datetimeoffset");
@@ -361,6 +367,9 @@ namespace VideoStudio.Api.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<double?>("ProbedRawClipDurationSeconds")
+                        .HasColumnType("float");
+
                     b.Property<int>("Progress")
                         .HasColumnType("int");
 
@@ -370,6 +379,19 @@ namespace VideoStudio.Api.Migrations
                     b.Property<string>("Prompt")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("RawDurationCoveragePercent")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RenderDurationMode")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("RequestedFrameNum")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RequestedShotDurationSeconds")
+                        .HasColumnType("int");
 
                     b.Property<int?>("SampleSteps")
                         .HasColumnType("int");

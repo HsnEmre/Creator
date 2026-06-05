@@ -456,6 +456,14 @@ app.MapGet("/api/projects/{id:guid}/shots", async (Guid id, VideoStudioDbContext
                 latestRenderDurationSeconds = RenderDurationSeconds(latestRender),
                 latestRenderOutputPath = latestRender?.OutputPath,
                 latestRenderOutputUrl = TryBuildMediaUrl(latestRender?.OutputPath, "renders", id),
+                latestRenderDurationMode = latestRender?.RenderDurationMode,
+                latestRenderDurationModeName = latestRender?.RenderDurationMode.ToString(),
+                latestRenderRequestedShotDurationSeconds = latestRender?.RequestedShotDurationSeconds,
+                latestRenderRequestedFrameNum = latestRender?.RequestedFrameNum,
+                latestRenderActualFrameNum = latestRender?.ActualFrameNum ?? latestRender?.FrameNum,
+                latestRenderExpectedRawClipDurationSeconds = latestRender?.ExpectedRawClipDurationSeconds ?? ExpectedRawClipDurationSeconds(latestRender?.FrameNum),
+                latestRenderProbedRawClipDurationSeconds = latestRender?.ProbedRawClipDurationSeconds,
+                latestRenderRawDurationCoveragePercent = latestRender?.RawDurationCoveragePercent,
                 latestRenderStartedAt = latestRender?.StartedAt,
                 latestRenderFinishedAt = latestRender?.FinishedAt
             };
@@ -603,6 +611,35 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
     var settings = GetPresetSettings(preset);
     var hasExplicitTarget = request?.ShotIds?.Count > 0 || request?.SceneIndex is not null || request?.ShotIndex is not null;
     var limitedShots = hasExplicitTarget ? shots : shots.Take(maxShots).ToList();
+    if (renderDurationMode == RenderDurationMode.LongMotion && useShotStartImage)
+    {
+        logger.LogInformation(
+            "longmotion_keyframe_required projectId={ProjectId} shotCount={ShotCount}",
+            project.Id,
+            limitedShots.Count);
+        var missingLongMotionKeyframes = limitedShots
+            .Where(shot => string.IsNullOrWhiteSpace(shot.StartImagePath))
+            .Select(shot => new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index))
+            .ToList();
+        if (missingLongMotionKeyframes.Count > 0)
+        {
+            foreach (var missingShot in missingLongMotionKeyframes)
+            {
+                logger.LogWarning(
+                    "longmotion_keyframe_missing projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId}",
+                    project.Id,
+                    missingShot.SceneIndex,
+                    missingShot.ShotIndex,
+                    missingShot.ShotId);
+            }
+
+            return Results.BadRequest(new
+            {
+                error = "LongMotion with Image-to-Video requires a shot keyframe for every selected shot. Generate or upload missing keyframes, or turn off Image-to-Video explicitly.",
+                missingShots = missingLongMotionKeyframes
+            });
+        }
+    }
     var latestSuccessfulRenders = LatestCompletedRendersByShot(project.RenderJobs);
     var queuedShotDtos = new List<RenderQueuedShotDto>();
     var skippedShotDtos = new List<RenderQueuedShotDto>();
@@ -618,7 +655,8 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
                 continue;
             }
 
-            if (latestSuccessfulRenders.ContainsKey(shot.Id))
+            if (latestSuccessfulRenders.TryGetValue(shot.Id, out var latestSuccessfulRender) &&
+                CompletedRenderSatisfiesRequestedMode(latestSuccessfulRender, renderDurationMode))
             {
                 skippedShotDtos.Add(new RenderQueuedShotDto(shot.Id, shot.Scene!.Index, shot.Index));
                 continue;
@@ -658,6 +696,16 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             generationMode == VideoGenerationMode.ImageToVideo);
         if (generationMode == VideoGenerationMode.ImageToVideo)
         {
+            if (renderDurationMode == RenderDurationMode.LongMotion)
+            {
+                logger.LogInformation(
+                    "longmotion_i2v_confirmed projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} startImagePath={StartImagePath}",
+                    project.Id,
+                    shot.Scene!.Index,
+                    shot.Index,
+                    shot.Id,
+                    inputImagePath);
+            }
             logger.LogInformation(
                 "shot_start_image_used_for_video projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} imagePath={ImagePath}",
                 project.Id,
@@ -668,6 +716,17 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
         }
         else
         {
+            if (renderDurationMode == RenderDurationMode.LongMotion)
+            {
+                logger.LogWarning(
+                    "longmotion_text_only_blocked projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} useShotStartImage={UseShotStartImage} reason={Reason}",
+                    project.Id,
+                    shot.Scene!.Index,
+                    shot.Index,
+                    shot.Id,
+                    useShotStartImage,
+                    useShotStartImage ? "missing keyframe was blocked before queueing" : "user explicitly disabled Image-to-Video keyframes");
+            }
             logger.LogInformation(
                 "shot_start_image_not_supported_for_video projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} character_reference_image_not_used_by_video_backend={CharacterReferenceImageNotUsedByVideoBackend} reason={Reason}",
                 project.Id,
@@ -685,6 +744,7 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             ShotId = shot.Id,
             JobType = RenderJobType.RenderVideo,
             Preset = preset,
+            RenderDurationMode = durationSelection.Mode,
             GenerationMode = generationMode,
             Prompt = shot.Prompt,
             CompiledPrompt = compiled.prompt,
@@ -693,6 +753,10 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
             FrameNum = durationSelection.ActualFrameNum,
             SampleSteps = settings.sampleSteps,
             Seed = null,
+            RequestedShotDurationSeconds = durationSelection.RequestedShotDurationSeconds,
+            RequestedFrameNum = durationSelection.RequestedFrameNum,
+            ActualFrameNum = durationSelection.ActualFrameNum,
+            ExpectedRawClipDurationSeconds = durationSelection.ExpectedRawClipDurationSeconds,
             InputImagePath = inputImagePath,
             InputVideoPath = shot.InputVideoPath,
             InputAudioPath = shot.InputAudioPath,
@@ -997,6 +1061,10 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
             sceneIndex = item.Shot.Scene?.Index ?? 0,
             shotIndex = item.Shot.Index,
             renderJobId = item.Render.Id,
+            renderDurationMode = item.Render.RenderDurationMode.ToString(),
+            expectedRawClipDurationSeconds = item.Render.ExpectedRawClipDurationSeconds ?? ExpectedRawClipDurationSeconds(item.Render.FrameNum),
+            probedRawClipDurationSeconds = item.Render.ProbedRawClipDurationSeconds,
+            rawDurationCoveragePercent = item.Render.RawDurationCoveragePercent,
             targetDurationSeconds = item.Shot.DurationSeconds
         })
         .ToList();
@@ -1055,12 +1123,16 @@ app.MapPost("/api/projects/{id:guid}/assemble", async (Guid id, AssembleRequest?
     foreach (var segment in assemblySegments)
     {
         logger.LogInformation(
-            "ffmpeg_assembly_selected_shot projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} targetDurationSeconds={TargetDurationSeconds} videoPath={VideoPath}",
+            "ffmpeg_assembly_selected_shot projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} renderJobId={RenderJobId} renderDurationMode={RenderDurationMode} expectedRawClipDurationSeconds={ExpectedRawClipDurationSeconds} probedRawClipDurationSeconds={ProbedRawClipDurationSeconds} rawDurationCoveragePercent={RawDurationCoveragePercent} targetDurationSeconds={TargetDurationSeconds} videoPath={VideoPath}",
             id,
             segment.sceneIndex,
             segment.shotIndex,
             segment.shotId,
             segment.renderJobId,
+            segment.renderDurationMode,
+            segment.expectedRawClipDurationSeconds,
+            segment.probedRawClipDurationSeconds,
+            segment.rawDurationCoveragePercent,
             segment.targetDurationSeconds,
             segment.videoPath);
     }
@@ -1235,11 +1307,13 @@ app.MapGet("/api/projects/{id:guid}/render-jobs", async (Guid id, VideoStudioDbC
             j.FinishedAt,
             RenderDurationSeconds(j),
             latestSuccessfulRenderIds.Contains(j.Id),
-            InferRenderDurationMode(j).ToString(),
-            j.Shot?.DurationSeconds,
-            RequestedFrameNumForJob(j, j.Shot?.DurationSeconds),
-            j.FrameNum,
-            ExpectedRawClipDurationSeconds(j.FrameNum)))
+            j.RenderDurationMode.ToString(),
+            j.RequestedShotDurationSeconds ?? j.Shot?.DurationSeconds,
+            j.RequestedFrameNum ?? RequestedFrameNumForJob(j, j.Shot?.DurationSeconds),
+            j.ActualFrameNum ?? j.FrameNum,
+            j.ExpectedRawClipDurationSeconds ?? ExpectedRawClipDurationSeconds(j.FrameNum),
+            j.ProbedRawClipDurationSeconds,
+            j.RawDurationCoveragePercent))
         .ToList();
 
     return Results.Ok(jobs);
@@ -1552,6 +1626,8 @@ app.MapPost("/api/worker/jobs/next", async (VideoStudioDbContext db) =>
 {
     await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
     var job = await db.RenderJobs
+        .Include(j => j.Scene)
+        .Include(j => j.Shot)
         .Where(j => j.Status == RenderJobStatus.Pending)
         .OrderBy(j => j.CreatedAt)
         .FirstOrDefaultAsync();
@@ -1572,7 +1648,10 @@ app.MapPost("/api/worker/jobs/next", async (VideoStudioDbContext db) =>
 
 app.MapGet("/api/worker/jobs/{id:guid}", async (Guid id, VideoStudioDbContext db) =>
 {
-    var job = await db.RenderJobs.FindAsync(id);
+    var job = await db.RenderJobs
+        .Include(j => j.Scene)
+        .Include(j => j.Shot)
+        .FirstOrDefaultAsync(j => j.Id == id);
     return job is null ? Results.NotFound() : Results.Ok(ToRenderJobDto(job));
 });
 
@@ -1603,6 +1682,14 @@ app.MapPost("/api/worker/jobs/{id:guid}/complete", async (Guid id, CompleteRende
     job.Status = RenderJobStatus.Completed;
     job.Progress = 100;
     job.OutputPath = request.OutputPath;
+    if (request.ProbedRawClipDurationSeconds is double probedRawClipDurationSeconds)
+    {
+        job.ProbedRawClipDurationSeconds = Math.Round(Math.Max(0, probedRawClipDurationSeconds), 3);
+        var target = job.RequestedShotDurationSeconds.GetValueOrDefault();
+        job.RawDurationCoveragePercent = target > 0
+            ? (int)Math.Round((job.ProbedRawClipDurationSeconds.Value / target) * 100)
+            : null;
+    }
     job.ErrorMessage = null;
     job.FinishedAt = DateTimeOffset.UtcNow;
     if (job.JobType == RenderJobType.GenerateAudio && job.DialogueLineId is Guid dialogueLineId)
@@ -1793,7 +1880,7 @@ static ProjectSummaryDto ToSummary(Project project) => new(project.Id, project.N
 
 static ProjectDetailsDto ToDetails(Project project) => new(project.Id, project.Name, project.StoryText, project.TargetDurationSeconds, project.Status, project.Logline, project.Genre, project.CreatedAt, project.UpdatedAt);
 
-static RenderJobDto ToRenderJobDto(RenderJob job) => new(job.Id, job.ProjectId, job.SceneId, job.ShotId, job.CharacterId, job.DialogueLineId, job.JobType, job.Preset, job.GenerationMode, job.GenerationMode.ToString(), job.Prompt, job.CompiledPrompt, job.NegativePrompt, job.Size, job.FrameNum, job.SampleSteps, job.Seed, job.InputImagePath, TryBuildMediaUrl(job.InputImagePath, "assets", job.ProjectId), job.InputVideoPath, job.InputAudioPath, job.TextContent, job.Speaker, job.Emotion, job.Language, job.Voice, job.OutputPath, job.Status, job.Progress, job.ErrorMessage, job.CreatedAt, job.StartedAt, job.FinishedAt, RenderDurationSeconds(job), InferRenderDurationMode(job).ToString(), null, RequestedFrameNumForJob(job, null), job.FrameNum, ExpectedRawClipDurationSeconds(job.FrameNum));
+static RenderJobDto ToRenderJobDto(RenderJob job) => new(job.Id, job.ProjectId, job.SceneId, job.ShotId, job.Scene?.Index, job.Shot?.Index, job.CharacterId, job.DialogueLineId, job.JobType, job.Preset, job.GenerationMode, job.GenerationMode.ToString(), job.Prompt, job.CompiledPrompt, job.NegativePrompt, job.Size, job.FrameNum, job.SampleSteps, job.Seed, job.InputImagePath, TryBuildMediaUrl(job.InputImagePath, "assets", job.ProjectId), job.InputVideoPath, job.InputAudioPath, job.TextContent, job.Speaker, job.Emotion, job.Language, job.Voice, job.OutputPath, job.Status, job.Progress, job.ErrorMessage, job.CreatedAt, job.StartedAt, job.FinishedAt, RenderDurationSeconds(job), job.RenderDurationMode.ToString(), job.RequestedShotDurationSeconds, job.RequestedFrameNum ?? RequestedFrameNumForJob(job, null), job.ActualFrameNum ?? job.FrameNum, job.ExpectedRawClipDurationSeconds ?? ExpectedRawClipDurationSeconds(job.FrameNum), job.ProbedRawClipDurationSeconds, job.RawDurationCoveragePercent);
 
 static Dictionary<Guid, RenderJob> LatestCompletedRendersByShot(IEnumerable<RenderJob> jobs)
 {
@@ -1806,12 +1893,18 @@ static Dictionary<Guid, RenderJob> LatestCompletedRendersByShot(IEnumerable<Rend
         .ToDictionary(
             g => g.Key,
             g => g
-                .OrderByDescending(RenderSortTimestamp)
+                .OrderByDescending(j => j.RenderDurationMode == RenderDurationMode.LongMotion ? 1 : 0)
+                .ThenByDescending(RenderSortTimestamp)
                 .ThenByDescending(j => j.CreatedAt)
                 .First());
 }
 
 static DateTimeOffset RenderSortTimestamp(RenderJob job) => job.FinishedAt ?? job.CreatedAt;
+
+static bool CompletedRenderSatisfiesRequestedMode(RenderJob job, RenderDurationMode requestedMode)
+{
+    return requestedMode != RenderDurationMode.LongMotion || job.RenderDurationMode == RenderDurationMode.LongMotion;
+}
 
 static bool HasValidOutputPath(string? outputPath)
 {
