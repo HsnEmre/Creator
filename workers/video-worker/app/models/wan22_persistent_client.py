@@ -28,6 +28,47 @@ class Wan22PersistentClient:
                 self._ensure_started()
                 payload = self._build_render_payload(request, output_path)
                 start = now()
+                log_perf(
+                    "wan_worker_command_arguments_built",
+                    request_id=payload["request_id"],
+                    job_id=request.job_id,
+                    project_id=request.project_id,
+                    render_duration_mode=request.render_duration_mode or "FastPreview",
+                    command_frame_num=payload["frame_num"],
+                    command_size=payload["size"],
+                    sample_steps=payload["sample_steps"],
+                    cfg=payload.get("sample_guide_scale") or "wan_generate_default",
+                    sampler=payload.get("sample_solver") or "wan_generate_default",
+                    scheduler="unsupported_by_wan_cli" if request.render_duration_mode == "ComfyUIParity" else "wan_generate_default",
+                    shift=payload.get("sample_shift") or "wan_generate_default",
+                    command_uses_image=bool(payload.get("image")),
+                    persistent_pipeline=True,
+                    output_path=str(output_path),
+                )
+                log_perf(
+                    "wan_worker_command_frame_num_applied",
+                    request_id=payload["request_id"],
+                    job_id=request.job_id,
+                    project_id=request.project_id,
+                    render_duration_mode=request.render_duration_mode or "FastPreview",
+                    target_shot_duration_seconds=request.requested_shot_duration_seconds,
+                    requested_frame_num=request.requested_frame_num,
+                    actual_frame_num=request.actual_frame_num,
+                    command_frame_num=payload["frame_num"],
+                    persistent_pipeline=True,
+                )
+                log_perf(
+                    "wan_worker_expected_raw_duration",
+                    request_id=payload["request_id"],
+                    job_id=request.job_id,
+                    project_id=request.project_id,
+                    render_duration_mode=request.render_duration_mode or "FastPreview",
+                    target_shot_duration_seconds=request.requested_shot_duration_seconds,
+                    requested_frame_num=request.requested_frame_num,
+                    actual_frame_num=request.actual_frame_num,
+                    expected_raw_clip_duration_seconds=request.expected_raw_clip_duration_seconds,
+                    persistent_pipeline=True,
+                )
                 self._send(payload)
                 log_perf(
                     "wan_persistent_render_request_sent",
@@ -246,7 +287,8 @@ class Wan22PersistentClient:
             process.wait(timeout=10)
 
     def _build_render_payload(self, request: RenderRequest, output_path: Path) -> Dict[str, Any]:
-        return {
+        is_comfyui_parity = (request.render_duration_mode or "") == "ComfyUIParity"
+        payload = {
             "command": "render_ti2v",
             "request_id": request.job_id,
             "job_id": request.job_id,
@@ -258,8 +300,9 @@ class Wan22PersistentClient:
             "size": request.size or self.settings.wan22_default_size,
             "frame_num": request.actual_frame_num or request.frame_num or self.settings.wan22_default_frame_num,
             "sample_steps": request.sample_steps or self.settings.wan22_default_sample_steps,
-            "sample_shift": None,
-            "sample_guide_scale": None,
+            "sample_shift": 8.0 if is_comfyui_parity else None,
+            "sample_guide_scale": 5.0 if is_comfyui_parity else None,
+            "sample_solver": "unipc" if is_comfyui_parity else None,
             "offload_model": self.settings.wan22_default_offload_model,
             "convert_model_dtype": self.settings.wan22_default_convert_model_dtype,
             "t5_cpu": self.settings.wan22_default_t5_cpu,
@@ -267,6 +310,41 @@ class Wan22PersistentClient:
             "save_file": str(output_path),
             "base_seed": request.seed if request.seed is not None else -1,
         }
+        if is_comfyui_parity:
+            for key in ("frame_num", "sample_steps", "size", "sample_guide_scale", "sample_solver", "sample_shift"):
+                log_perf(
+                    "wan_comfyui_parity_setting_applied",
+                    job_id=request.job_id,
+                    project_id=request.project_id,
+                    shot_id=request.shot_id or "",
+                    render_duration_mode=request.render_duration_mode,
+                    setting=key,
+                    value=payload.get(key),
+                    persistent_pipeline=True,
+                )
+            log_perf(
+                "wan_comfyui_parity_setting_unsupported",
+                job_id=request.job_id,
+                project_id=request.project_id,
+                shot_id=request.shot_id or "",
+                render_duration_mode=request.render_duration_mode,
+                setting="scheduler",
+                requested="simple",
+                reason="warm_ti2v_server accepts sample_solver but no separate scheduler field",
+                persistent_pipeline=True,
+            )
+            log_perf(
+                "wan_comfyui_parity_setting_unsupported",
+                job_id=request.job_id,
+                project_id=request.project_id,
+                shot_id=request.shot_id or "",
+                render_duration_mode=request.render_duration_mode,
+                setting="denoise",
+                requested="1.0",
+                reason="warm_ti2v_server does not expose denoise for ti2v-5B",
+                persistent_pipeline=True,
+            )
+        return payload
 
     @staticmethod
     def _safe_for_console(value: str) -> str:

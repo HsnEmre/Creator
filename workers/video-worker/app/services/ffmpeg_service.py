@@ -353,7 +353,7 @@ class FFmpegService:
         mode = str(segment.get("render_duration_mode") or "FastPreview")
         target_duration = float(segment["target_duration_seconds"])
         ratio = (source_duration / target_duration) if source_duration is not None and target_duration > 0 else 0.0
-        if mode == "LongMotion":
+        if mode in {"LongMotion", "ComfyUIParity"}:
             policy = "fail_severe_extension"
         elif mode == "CinematicPreview":
             policy = "allow_with_warning"
@@ -370,7 +370,7 @@ class FFmpegService:
             extension_ratio=round(ratio, 3),
             policy=policy,
         )
-        if mode != "LongMotion" or ratio >= 0.75:
+        if mode not in {"LongMotion", "ComfyUIParity"} or ratio >= 0.75:
             return
         log_perf(
             "ffmpeg_assembly_source_too_short_for_longmotion",
@@ -406,7 +406,7 @@ class FFmpegService:
             policy=policy,
         )
         raise RuntimeError(
-            "LongMotion source clip is too short for duration-locked assembly. "
+            f"{mode} source clip is too short for duration-locked assembly. "
             f"source={source_duration or 0:.3f}s target={target_duration:.3f}s ratio={ratio:.3f}. "
             "Refusing to create fake loop-stretched long motion."
         )

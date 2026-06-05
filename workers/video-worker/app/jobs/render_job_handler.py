@@ -204,11 +204,15 @@ class RenderJobHandler:
         frame_count = request.actual_frame_num or request.frame_num or self.settings.wan22_default_frame_num
         output_resolution = request.size or self.settings.wan22_default_size
         sample_steps = request.sample_steps or self.settings.wan22_default_sample_steps
+        is_comfyui_parity = (request.render_duration_mode or "") == "ComfyUIParity"
         return {
             "frame_count": frame_count,
             "output_resolution": output_resolution,
             "sample_steps": sample_steps,
-            "guidance_cfg": "wan_generate_default",
+            "guidance_cfg": 5.0 if is_comfyui_parity else "wan_generate_default",
+            "sampler": "unipc" if is_comfyui_parity else "wan_generate_default",
+            "scheduler": "unsupported_by_wan_cli" if is_comfyui_parity else "wan_generate_default",
+            "shift": 8.0 if is_comfyui_parity else "wan_generate_default",
             "dtype": "fp16_conversion_enabled" if self.settings.wan22_default_convert_model_dtype else "wan_default",
             "vae_dtype": self.settings.wan22_vae_dtype or "wan_default",
             "device": "external_wan_generate_py",

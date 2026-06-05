@@ -27,12 +27,40 @@ class Wan22TI2VAdapter:
 
         mode = "ImageToVideo using shot start image" if request.image_path else "TextToVideo without start image"
         logging.info("Wan2.2 TI2V render mode for job %s: %s", request.job_id, mode)
+        if self._is_comfyui_parity(request) and not request.image_path:
+            log_perf(
+                "comfyui_parity_text_only_blocked",
+                job_id=request.job_id,
+                project_id=request.project_id,
+                shot_id=self._safe_value(request.shot_id),
+                render_duration_mode=request.render_duration_mode,
+                reason="ComfyUIParity requires Image-to-Video start image for consistency",
+            )
+            return RenderResult(False, error_message="ComfyUIParity requires a shot start image and cannot run as Text-to-Video.")
         command_build_start = now()
         command = self._build_command(request, output_path)
         size = request.size or self.settings.wan22_default_size
         frame_num = self._effective_frame_num(request)
         sample_steps = request.sample_steps or self.settings.wan22_default_sample_steps
+        parity_settings = self._comfyui_parity_settings(request)
         expected_raw_duration = request.expected_raw_clip_duration_seconds or self._expected_duration(frame_num)
+        if self._is_comfyui_parity(request):
+            log_perf(
+                "wan_comfyui_parity_profile_selected",
+                job_id=request.job_id,
+                project_id=request.project_id,
+                shot_id=self._safe_value(request.shot_id),
+                render_duration_mode=request.render_duration_mode,
+                requested_frame_num=request.requested_frame_num,
+                actual_frame_num=frame_num,
+                expected_raw_clip_duration_seconds=expected_raw_duration,
+                sample_steps=sample_steps,
+                cfg=parity_settings["cfg"],
+                sampler=parity_settings["sampler"],
+                scheduler=parity_settings["scheduler"],
+                shift=parity_settings["shift"],
+                size=size,
+            )
         log_perf(
             "wan_worker_duration_mode_received",
             job_id=request.job_id,
@@ -98,7 +126,10 @@ class Wan22TI2VAdapter:
             frame_count=frame_num,
             output_resolution=size,
             sample_steps=sample_steps,
-            guidance_cfg="wan_generate_default",
+            guidance_cfg=parity_settings["cfg"] if parity_settings else "wan_generate_default",
+            sampler=parity_settings["sampler"] if parity_settings else "wan_generate_default",
+            scheduler=parity_settings["scheduler"] if parity_settings else "unsupported_by_wan_cli",
+            shift=parity_settings["shift"] if parity_settings else "wan_generate_default",
             dtype="fp16_conversion_enabled" if self.settings.wan22_default_convert_model_dtype else "wan_default",
             device="external_wan_generate_py",
             t5_cpu=self.settings.wan22_default_t5_cpu,
@@ -211,6 +242,7 @@ class Wan22TI2VAdapter:
         frame_num = self._effective_frame_num(request)
         sample_steps = request.sample_steps or self.settings.wan22_default_sample_steps
         prompt = request.compiled_prompt or request.prompt
+        parity_settings = self._comfyui_parity_settings(request)
         command = [
             python_exe,
             "generate.py",
@@ -231,6 +263,12 @@ class Wan22TI2VAdapter:
             "--prompt",
             prompt,
         ]
+
+        if parity_settings:
+            command.extend(["--sample_solver", parity_settings["sampler"]])
+            command.extend(["--sample_shift", str(parity_settings["shift"])])
+            command.extend(["--sample_guide_scale", str(parity_settings["cfg"])])
+            self._log_comfyui_parity_settings(request, size, frame_num, sample_steps, parity_settings)
 
         if self.settings.wan22_default_convert_model_dtype:
             command.append("--convert_model_dtype")
@@ -259,6 +297,12 @@ class Wan22TI2VAdapter:
             project_id=request.project_id,
             render_duration_mode=request.render_duration_mode or "FastPreview",
             command_frame_num=frame_num,
+            command_size=size,
+            sample_steps=sample_steps,
+            cfg=parity_settings["cfg"] if parity_settings else self._command_value(command, "--sample_guide_scale") or "wan_generate_default",
+            sampler=parity_settings["sampler"] if parity_settings else self._command_value(command, "--sample_solver") or "wan_generate_default",
+            scheduler=parity_settings["scheduler"] if parity_settings else "unsupported_by_wan_cli",
+            shift=parity_settings["shift"] if parity_settings else self._command_value(command, "--sample_shift") or "wan_generate_default",
             command_uses_image="--image" in command,
             has_negative_prompt="--negative_prompt" in command,
             output_path=str(output_path),
@@ -294,38 +338,39 @@ class Wan22TI2VAdapter:
         return float(probed or 0)
 
     def _validate_longmotion_duration(self, request: RenderRequest, probed_duration: float) -> str:
-        if (request.render_duration_mode or "FastPreview") != "LongMotion":
+        mode = request.render_duration_mode or "FastPreview"
+        if mode not in {"LongMotion", "ComfyUIParity"}:
             return ""
         target = float(request.requested_shot_duration_seconds or 0)
         expected = float(request.expected_raw_clip_duration_seconds or self._expected_duration(self._effective_frame_num(request)))
-        threshold = min(target * 0.75, expected * 0.75) if target > 0 and expected > 0 else expected * 0.75
+        threshold = expected * 0.75 if mode == "ComfyUIParity" else (min(target * 0.75, expected * 0.75) if target > 0 and expected > 0 else expected * 0.75)
         if probed_duration + 0.01 < threshold:
             log_perf(
-                "wan_longmotion_raw_duration_validation_failed",
+                "wan_raw_duration_validation_failed",
                 job_id=request.job_id,
                 project_id=request.project_id,
                 shot_id=self._safe_value(request.shot_id),
                 scene_index=request.scene_index,
                 shot_index=request.shot_index,
-                render_duration_mode=request.render_duration_mode,
+                render_duration_mode=mode,
                 target_shot_duration_seconds=target,
                 expected_raw_clip_duration_seconds=expected,
                 probed_raw_clip_duration_seconds=probed_duration,
                 threshold_seconds=threshold,
             )
             return (
-                "LongMotion raw output duration is too short. "
+                f"{mode} raw output duration is too short. "
                 f"Expected about {expected:.2f}s, got {probed_duration:.2f}s. "
                 "Frame count may not have been applied by worker/Wan command."
             )
         log_perf(
-            "wan_longmotion_raw_duration_validation_completed",
+            "wan_raw_duration_validation_completed",
             job_id=request.job_id,
             project_id=request.project_id,
             shot_id=self._safe_value(request.shot_id),
             scene_index=request.scene_index,
             shot_index=request.shot_index,
-            render_duration_mode=request.render_duration_mode,
+            render_duration_mode=mode,
             target_shot_duration_seconds=target,
             expected_raw_clip_duration_seconds=expected,
             probed_raw_clip_duration_seconds=probed_duration,
@@ -339,6 +384,63 @@ class Wan22TI2VAdapter:
     @staticmethod
     def _expected_duration(frame_num: int) -> float:
         return round(max(1, frame_num) / 24.0, 3)
+
+    @staticmethod
+    def _is_comfyui_parity(request: RenderRequest) -> bool:
+        return (request.render_duration_mode or "") == "ComfyUIParity"
+
+    def _comfyui_parity_settings(self, request: RenderRequest):
+        if not self._is_comfyui_parity(request):
+            return None
+        return {
+            "cfg": 5.0,
+            "sampler": "unipc",
+            "scheduler": "unsupported_by_wan_cli",
+            "shift": 8.0,
+            "denoise": "unsupported_by_wan_cli",
+            "requested_size": "1280*736",
+            "applied_size": request.size or "1280*704",
+        }
+
+    def _log_comfyui_parity_settings(self, request: RenderRequest, size: str, frame_num: int, sample_steps: int, settings) -> None:
+        applied = {
+            "frame_num": frame_num,
+            "sample_steps": sample_steps,
+            "size": size,
+            "cfg": settings["cfg"],
+            "sampler": settings["sampler"],
+            "shift": settings["shift"],
+        }
+        for key, value in applied.items():
+            log_perf(
+                "wan_comfyui_parity_setting_applied",
+                job_id=request.job_id,
+                project_id=request.project_id,
+                shot_id=self._safe_value(request.shot_id),
+                render_duration_mode=request.render_duration_mode,
+                setting=key,
+                value=value,
+            )
+        log_perf(
+            "wan_comfyui_parity_setting_unsupported",
+            job_id=request.job_id,
+            project_id=request.project_id,
+            shot_id=self._safe_value(request.shot_id),
+            render_duration_mode=request.render_duration_mode,
+            setting="scheduler",
+            requested="simple",
+            reason="local Wan2.2 generate.py exposes sample_solver/sample_shift/sample_guide_scale but no separate scheduler flag",
+        )
+        log_perf(
+            "wan_comfyui_parity_setting_unsupported",
+            job_id=request.job_id,
+            project_id=request.project_id,
+            shot_id=self._safe_value(request.shot_id),
+            render_duration_mode=request.render_duration_mode,
+            setting="denoise",
+            requested="1.0",
+            reason="local Wan2.2 generate.py does not expose a denoise CLI argument for ti2v-5B",
+        )
 
     @staticmethod
     def _safe_value(value):

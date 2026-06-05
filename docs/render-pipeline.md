@@ -168,6 +168,7 @@ Future provider names such as `FLUX_DEV`, `FLUX_KONTEXT`, and `HIDREAM` are rese
 | `FastPreview` | uses the preset frame count, currently `25` for FastPreview | fastest pipeline validation; raw motion is about one second at 24fps |
 | `CinematicPreview` | uses `73` frames with the selected preset's sample steps | slower review clips with more visible motion |
 | `LongMotion` | derives frames from the shot target duration, normalizes to Wan-friendly `4n+1` counts, and clamps to `121` frames | slowest preview mode; intended for true generated motion rather than loop-stretched duration |
+| `ComfyUIParity` | uses `161` frames, `18` sample steps, CFG `5.0`, UniPC sampler, shift `8.0`, and the nearest Wan-supported TI2V size `1280*704` | closest direct-Wan approximation of the reference 5-6 second workflow; slowest and intended for consistency checks |
 
 The API logs duration-mode decisions when render jobs are created:
 
@@ -196,12 +197,25 @@ The Storyboard UI shows a large always-visible Render Profile selector in the St
 
 `LongMotion` is required when the goal is real longer raw motion. It requires shot start images/keyframes for continuity. When `LongMotion` is selected with Image-to-Video, the API blocks queueing if any selected shot is missing a keyframe instead of silently falling back to Text-to-Video.
 
+`ComfyUIParity` is the explicit profile for reproducing the user's working graph as closely as the current local Wan2.2 CLI allows without adding ComfyUI. The reference graph uses 1280x736, length 161, 24 fps, 18 steps, CFG 5.0, UniPC, simple scheduler, shift 8.0, VAE decode, and 24 fps save. Local Wan2.2 `ti2v-5B` supports `1280*704` and `704*1280`, not `1280*736`, so VideoStudio applies `1280*704` and logs the unsupported exact size. The Wan CLI supports `--sample_solver unipc`, `--sample_shift 8.0`, and `--sample_guide_scale 5.0`; it does not expose a separate scheduler or denoise argument, so those are logged as unsupported instead of silently invented.
+
+ComfyUI-style output is more consistent because it generates a direct 161-frame raw clip before saving. That is fundamentally different from creating a 25-frame FastPreview clip and later extending it during assembly. Assembly extension is useful for timing previews, but it is not a replacement for true generated motion.
+
 For a 5-second shot in `LongMotion`, verify the queued/completed render metadata:
 
 * `renderDurationMode=LongMotion`
 * `actualFrameNum=121` at the current safe local ceiling
 * `expectedRawClipDurationSeconds` near `5.0`
 * `probedRawClipDurationSeconds` around `5s` after FFprobe completion
+
+For a ComfyUIParity shot, verify:
+
+* `renderDurationMode=ComfyUIParity`
+* `actualFrameNum=161`
+* `sampleSteps=18`
+* `size=1280*704`
+* `expectedRawClipDurationSeconds=6.71`
+* `probedRawClipDurationSeconds` around `6.7s` after FFprobe completion
 
 14. `maxShots`, `sceneIndex`, and `shotIndex` can limit queueing to a subset for quick iteration.
 
@@ -271,7 +285,7 @@ When `force=false` or omitted, render creation skips shots that already have an 
 
 31. If only character references exist and no shot start image exists, the render remains `TextToVideo`.
 
-31b. LongMotion is stricter than preview modes. If `LongMotion` is requested with `useShotStartImage=true`, every selected shot must have a valid shot start image before the API queues render jobs. Missing keyframes are blocked with a clear error instead of silently falling back to Text-to-Video. The worker also verifies that an Image-to-Video start image path exists before invoking Wan2.2.
+31b. LongMotion and ComfyUIParity are stricter than preview modes. If either mode is requested, `useShotStartImage=true` is required and every selected shot must have a valid shot start image before the API queues render jobs. Missing keyframes are blocked with a clear error instead of silently falling back to Text-to-Video. The worker also verifies that an Image-to-Video start image path exists before invoking Wan2.2.
 
 31a. Render-job creation logs the active image-conditioning path:
 
@@ -385,7 +399,7 @@ Do not change quality or offload defaults until diagnostics show the real bottle
 
 39a. Use `CinematicPreview` or `LongMotion` when the raw generated clip should contain more real motion before assembly. Assembly still uses the latest valid render per shot and still duration-locks segments to the storyboard timing; it does not turn a one-second FastPreview into true long generated motion.
 
-39b. LongMotion is not allowed to fake long shots by severe loop/hold extension. The worker fails a LongMotion render if the probed raw output duration is below 75 percent of the target/expected raw duration. During assembly, LongMotion source clips must also cover at least 75 percent of their target shot duration or assembly fails with `ffmpeg_assembly_fake_duration_prevented`.
+39b. LongMotion and ComfyUIParity are not allowed to fake long shots by severe loop/hold extension. The worker fails a LongMotion render if the probed raw output duration is below 75 percent of the target/expected raw duration. The worker fails a ComfyUIParity render if the probed raw output duration is below 75 percent of the expected 161-frame raw duration. During assembly, LongMotion and ComfyUIParity source clips must also cover at least 75 percent of their target shot duration or assembly fails with `ffmpeg_assembly_fake_duration_prevented`.
 
 40. The worker validates final assembled duration against the sum of target shot durations. Tolerance is `max(2 seconds, 2 percent of total target duration)`. If a 180-second storyboard produces a 9.375-second output, the assembly job fails.
 
@@ -478,6 +492,7 @@ The Storyboard UI shows the latest render state per shot:
 * expected raw generated clip duration when frame metadata is available
 * warnings when the raw generated clip is shorter than the planned shot duration
 * LongMotion failures when raw output is too short and would require fake loop extension
+* ComfyUIParity metadata, including 161-frame request, expected raw duration, and probed raw duration
 
 "Animate Selected" is the explicit regeneration path for the selected shot. "Animate Missing" sends all storyboard shot IDs with `force=false`, allowing the backend to skip completed or already-active shots. "Regenerate All" sends the same shot IDs with `force=true` for intentional full rerenders.
 
@@ -485,7 +500,6 @@ VAE decode remains the dominant runtime bottleneck for Wan2.2 renders. The rende
 
 Future work:
 
-* higher frame-count render profiles beyond the current safe 121-frame local ceiling
 * deeper image-conditioned character reference support only if the architecture later supports it
 * IP-Adapter-like or reference-conditioning workflows only through Python worker adapters, never through ComfyUI
 * richer plan versioning for preserving multiple storyboard generations side-by-side

@@ -9,8 +9,13 @@ public sealed class PromptCompiler(ILogger<PromptCompiler> logger)
     private const string DefaultNegative = "low quality, blurry, low resolution, watermark, text, logo, extra fingers, deformed hands, distorted face, bad anatomy, duplicate body, flicker, jitter, inconsistent lighting, broken motion, frame tearing";
     private static readonly Regex CorporateTextRegex = new(@"\b[A-Z0-9]{2,}(?:\s+[A-Z0-9]{2,})+\b", RegexOptions.Compiled);
 
-    public (string prompt, string negativePrompt) Compile(Project project, Scene scene, Shot shot, IReadOnlyCollection<Character> characters, RenderPreset preset, bool useCharacterReferenceInPrompt = false, bool isImageToVideo = false)
+    public (string prompt, string negativePrompt) Compile(Project project, Scene scene, Shot shot, IReadOnlyCollection<Character> characters, RenderPreset preset, bool useCharacterReferenceInPrompt = false, bool isImageToVideo = false, RenderDurationMode renderDurationMode = RenderDurationMode.FastPreview)
     {
+        if (renderDurationMode == RenderDurationMode.ComfyUIParity)
+        {
+            return CompileComfyUIParity(project, scene, shot, characters, useCharacterReferenceInPrompt, isImageToVideo);
+        }
+
         var prompt = new StringBuilder();
         var shotText = $"{shot.Action} {shot.Prompt} {scene.Summary}";
         var relevantCharacters = characters.Where(c =>
@@ -70,6 +75,62 @@ public sealed class PromptCompiler(ILogger<PromptCompiler> logger)
         prompt.Append($"Primary shot prompt: {corePrompt}.");
 
         var negative = BuildNegativePrompt(project.NegativePrompt, scene, shot, relevantCharacters);
+        return (prompt.ToString().Trim(), negative);
+    }
+
+    private (string prompt, string negativePrompt) CompileComfyUIParity(Project project, Scene scene, Shot shot, IReadOnlyCollection<Character> characters, bool useCharacterReferenceInPrompt, bool isImageToVideo)
+    {
+        var shotText = $"{shot.Action} {shot.Prompt} {scene.Summary}";
+        var relevantCharacters = characters.Where(c =>
+            shotText.Contains(c.Name, StringComparison.OrdinalIgnoreCase) ||
+            scene.RequiredCharactersJson.Contains(c.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+        var primaryAction = SelectPrimaryMotion(shotText.ToLowerInvariant(), shot.Action);
+        var environmentalMotion = SelectEnvironmentalMotion($"{scene.Title} {scene.Summary} {scene.Location} {scene.Mood} {shot.Action}".ToLowerInvariant());
+        var cameraMotion = ValueOr(shot.CameraMotion, "slow cinematic push-in");
+
+        var prompt = new StringBuilder();
+        prompt.Append("photorealistic live-action cinematic shot. ");
+        if (relevantCharacters.Count > 0)
+        {
+            prompt.Append("Exact character visual lock: ");
+            prompt.Append(string.Join("; ", relevantCharacters.Select(c => $"{c.Name}: {c.VisualPrompt}")));
+            prompt.Append(". Same face, same age, same hair, same clothing, same body proportions. ");
+            if (useCharacterReferenceInPrompt)
+            {
+                var referenced = relevantCharacters.Where(c => !string.IsNullOrWhiteSpace(c.ReferenceImagePath)).ToList();
+                if (referenced.Count > 0)
+                {
+                    prompt.Append("Use character references only as identity guidance in the written prompt. ");
+                }
+            }
+            logger.LogInformation(
+                "character_reference_lock_applied projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} characterCount={CharacterCount} renderDurationMode={RenderDurationMode}",
+                project.Id,
+                scene.Index,
+                shot.Index,
+                shot.Id,
+                relevantCharacters.Count,
+                RenderDurationMode.ComfyUIParity);
+        }
+
+        if (isImageToVideo)
+        {
+            prompt.Append("Animate from the supplied shot keyframe. ");
+        }
+        prompt.Append($"Location: {ValueOr(scene.Location, "cinematic location")}, {ValueOr(scene.TimeOfDay, "natural time of day")}. ");
+        prompt.Append($"Mood and lighting: {ValueOr(scene.Mood, "focused")}, {ValueOr(project.LightingStyle, "natural motivated cinematic lighting")}. ");
+        prompt.Append($"Primary action: {primaryAction}. ");
+        prompt.Append($"Environmental motion: {environmentalMotion}. ");
+        prompt.Append($"Camera motion: {cameraMotion}. ");
+        prompt.Append("No subtitles, no readable text, no logos, no UI words. ");
+        prompt.Append($"Shot prompt: {RemoveDialogueLikeText(ReplaceReadableSignText(ValueOr(shot.Prompt, shot.Action)))}.");
+
+        var negative = string.Join(", ", new[]
+        {
+            BuildNegativePrompt(project.NegativePrompt, scene, shot, relevantCharacters),
+            "cartoon, anime, CGI, illustration, digital painting, concept art, 3d render, video game cinematic, doll face, plastic skin, inconsistent face, different costume, modern objects, text, logo, watermark"
+        }.SelectMany(part => part.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase));
         return (prompt.ToString().Trim(), negative);
     }
 

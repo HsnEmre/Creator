@@ -55,7 +55,8 @@ public enum RenderDurationMode
 {
     FastPreview,
     CinematicPreview,
-    LongMotion
+    LongMotion,
+    ComfyUIParity
 }
 
 public enum VideoGenerationMode

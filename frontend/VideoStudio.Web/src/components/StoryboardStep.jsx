@@ -84,7 +84,8 @@ function latestLongMotionFailure(jobs) {
 const RENDER_PROFILES = [
   ["FastPreview", "FastPreview", "Fastest pipeline test"],
   ["CinematicPreview", "CinematicPreview", "More raw motion"],
-  ["LongMotion", "LongMotion", "Slow, real longer motion"]
+  ["LongMotion", "LongMotion", "121 frames, slower motion"],
+  ["ComfyUIParity", "ComfyUIParity", "161 frames, 18 steps, closest parity"]
 ];
 
 function RenderProfileSelector({ value, onChange, name = "renderDurationMode", className = "" }) {
@@ -347,10 +348,12 @@ function ShotInspector({
   const rawClipDurationSeconds = rawClipSecondsFromJob(completedRender);
   const rawClipIsShort = Boolean(rawClipDurationSeconds && targetDurationSeconds && rawClipDurationSeconds + 0.5 < targetDurationSeconds);
   const isLongMotion = renderDurationMode === "LongMotion";
+  const isComfyUIParity = renderDurationMode === "ComfyUIParity";
+  const requiresKeyframe = isLongMotion || isComfyUIParity;
   const completedRenderMode = completedRender?.renderDurationMode || "FastPreview";
-  const selectedLongMotionMissing = isLongMotion && completedRender && completedRenderMode !== "LongMotion";
-  const selectedLongMotionBlocked = isLongMotion && !hasKeyframe;
-  const animateMissingBlocked = isLongMotion && missingKeyframeCount > 0;
+  const selectedProfileMissing = requiresKeyframe && completedRender && completedRenderMode !== renderDurationMode;
+  const selectedProfileBlocked = requiresKeyframe && !hasKeyframe;
+  const animateMissingBlocked = requiresKeyframe && missingKeyframeCount > 0;
 
   return (
     <aside className="storyboard-inspector">
@@ -433,16 +436,18 @@ function ShotInspector({
         <p className="muted">
           FastPreview creates about a 1 second raw clip. Assembly can extend it to the shot timing, but that is not true generated long motion.
         </p>
-        {isLongMotion ? (
+        {requiresKeyframe ? (
           <p className="msg compact-msg storyboard-longmotion-note">
-            LongMotion requires keyframes and attempts real longer raw motion. It is much slower.
+            {isComfyUIParity
+              ? "ComfyUIParity uses 161 frames, 18 steps, CFG 5.0, UniPC, and shift 8.0 where the Wan CLI supports them. It is the slowest/best consistency profile."
+              : "LongMotion requires keyframes and attempts real longer raw motion. It is much slower."}
           </p>
         ) : null}
-        {selectedLongMotionBlocked ? (
-          <p className="msg error compact-msg">Generate keyframes before LongMotion render.</p>
+        {selectedProfileBlocked ? (
+          <p className="msg error compact-msg">Generate keyframes before {renderDurationMode} render.</p>
         ) : null}
-        {selectedLongMotionMissing ? (
-          <p className="msg error compact-msg">This shot only has a {completedRenderMode} render. LongMotion render is still missing.</p>
+        {selectedProfileMissing ? (
+          <p className="msg error compact-msg">This shot only has a {completedRenderMode} render. {renderDurationMode} render is still missing.</p>
         ) : null}
       </div>
 
@@ -452,7 +457,7 @@ function ShotInspector({
           <button type="button" disabled={isBusy} onClick={() => onGenerateShotStartImage(shot.id)}>
             Regenerate Keyframe
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo || selectedLongMotionBlocked} onClick={() => onAnimateSelected(shot)}>
+          <button type="button" disabled={isBusy || hasRunningRenderVideo || selectedProfileBlocked} onClick={() => onAnimateSelected(shot)}>
             Animate Selected ({renderDurationMode})
           </button>
           <button type="button" disabled={isBusy || hasRunningRenderVideo || animateMissingBlocked} onClick={onAnimateAll}>
@@ -559,10 +564,12 @@ export default function StoryboardStep({
   const missingKeyframeCount = Math.max(0, shots.length - keyframeReadyCount);
   const selectedHasKeyframe = shotHasKeyframe(selectedShot);
   const isLongMotion = renderDurationMode === "LongMotion";
+  const isComfyUIParity = renderDurationMode === "ComfyUIParity";
+  const requiresKeyframe = isLongMotion || isComfyUIParity;
   const targetDurationSeconds = Number(summary.targetDurationSeconds || plan?.targetDurationSeconds || 0);
   const recommendLongMotion = targetDurationSeconds >= 60 && renderDurationMode !== "LongMotion";
-  const blockLongMotionBulkRender = isLongMotion && missingKeyframeCount > 0;
-  const blockLongMotionSelectedRender = isLongMotion && selectedShot && !selectedHasKeyframe;
+  const blockStrictBulkRender = requiresKeyframe && missingKeyframeCount > 0;
+  const blockStrictSelectedRender = requiresKeyframe && selectedShot && !selectedHasKeyframe;
 
   if (!plan) {
     return (
@@ -604,18 +611,20 @@ export default function StoryboardStep({
             name="renderDurationModeHeader"
             className="header-profile-options"
           />
-          {isLongMotion ? (
+          {requiresKeyframe ? (
             <p className="msg compact-msg storyboard-longmotion-note">
-              LongMotion requires keyframes and attempts real longer raw motion. It is much slower.
+              {isComfyUIParity
+                ? "ComfyUIParity uses 161 frames, 18 steps, CFG 5.0, UniPC, and shift 8.0 where supported. It is closest to the reference workflow and is much slower."
+                : "LongMotion requires keyframes and attempts real longer raw motion. It is much slower."}
             </p>
           ) : null}
           {recommendLongMotion ? (
             <p className="msg compact-msg storyboard-longmotion-recommendation">For final-quality film render, select LongMotion.</p>
           ) : null}
-          {blockLongMotionBulkRender ? (
-            <p className="msg error compact-msg">Generate keyframes before LongMotion render. {missingKeyframeCount} shot(s) are missing keyframes.</p>
+          {blockStrictBulkRender ? (
+            <p className="msg error compact-msg">Generate keyframes before {renderDurationMode} render. {missingKeyframeCount} shot(s) are missing keyframes.</p>
           ) : null}
-          {blockLongMotionSelectedRender ? (
+          {blockStrictSelectedRender ? (
             <p className="msg error compact-msg">The selected shot needs a keyframe before Animate Selected ({renderDurationMode}).</p>
           ) : null}
         </div>
@@ -623,11 +632,11 @@ export default function StoryboardStep({
           <button type="button" disabled={isBusy || !plan} onClick={onGenerateShotStartImages}>
             Generate Keyframes
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo || blockLongMotionBulkRender} onClick={onAnimateAll}>
+          <button type="button" disabled={isBusy || hasRunningRenderVideo || blockStrictBulkRender} onClick={onAnimateAll}>
             Animate Missing ({renderDurationMode})
           </button>
           {onRegenerateAll ? (
-            <button type="button" disabled={isBusy || hasRunningRenderVideo || blockLongMotionBulkRender} onClick={onRegenerateAll}>
+            <button type="button" disabled={isBusy || hasRunningRenderVideo || blockStrictBulkRender} onClick={onRegenerateAll}>
               Regenerate All ({renderDurationMode})
             </button>
           ) : null}
