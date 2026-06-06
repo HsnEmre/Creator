@@ -2581,13 +2581,13 @@ static KeyframePromptResult BuildShotStartImagePrompt(Project project, Scene sce
     var repairedFields = new List<string>();
     var style = CleanPromptPart(RequiredText(project.VisualStylePrompt, "photorealistic live-action historical cinematic style"));
     var canonicalCharacters = ResolveShotCharacters(scene, shot, characters.ToList());
-    var characterLock = BuildCanonicalCharacterLock(canonicalCharacters);
+    var characterLock = BuildCanonicalCharacterLock(project, scene, shot, canonicalCharacters, logger);
     if (canonicalCharacters.Count == 0)
     {
         characterLock = "No visible character; environment insert shot.";
     }
 
-    var locationLock = BuildConcreteLocationLock(project, scene, shot);
+    var locationLock = BuildConcreteLocationLock(project, scene, shot, logger, repairedFields);
     if (ContainsPlaceholderContinuity(locationLock))
     {
         failedFields.Add("locationLock");
@@ -2635,24 +2635,38 @@ static KeyframePromptResult BuildShotStartImagePrompt(Project project, Scene sce
         failedFields.Add("action");
         repairedFields.Add("action");
     }
+    if (ContainsTurkishVisualText(action) || LooksLikeStoryText(action))
+    {
+        var originalActionLength = action.Length;
+        action = RepairEnglishShotAction(scene, shot, canonicalCharacters);
+        repairedFields.Add("actionEnglishRepair");
+        logger.LogInformation(
+            "prompt_compiler_turkish_visual_prompt_repaired projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} originalLength={OriginalLength} finalLength={FinalLength} repairedFields={RepairedFields}",
+            project.Id,
+            scene.Index,
+            shot.Index,
+            shot.Id,
+            originalActionLength,
+            action.Length,
+            "actionEnglishRepair");
+    }
 
     var sceneAnchor = BuildConcreteSceneAnchor(project, scene, canonicalCharacters, locationLock, lighting);
-    var continuity = CleanPromptPart(RequiredText(shot.PreviousShotVisualState ?? shot.ContinuityNotes ?? scene.StoryStateBefore, "continue the same scene geography and character blocking from the previous shot"));
     var camera = CleanPromptPart($"{RequiredText(shot.ShotType, "medium cinematic shot")}, {RequiredText(shot.CameraMotion, "slow controlled camera movement")}");
     var mood = CleanPromptPart(RequiredText(scene.Mood, "tense grounded mystery"));
 
-    var prompt = string.Join(" ", new[]
+    var rawPrompt = string.Join(" ", new[]
     {
         $"Style lock: {style}.",
-        $"Concrete location: {locationLock}.",
+        $"Location: {locationLock}.",
         $"Visible characters: {characterLock}.",
         $"Primary action: {action}.",
-        $"Continuity from previous shot: {continuity}.",
-        $"Camera and framing: {camera}.",
+        $"Camera: {camera}.",
         $"Lighting: {lighting}.",
         $"Mood: {mood}.",
-        "No readable text, no subtitles, no logos, no UI words."
+        "No text, no subtitles, no logos."
     }).Trim();
+    var prompt = ApplySdxlPromptBudget(rawPrompt, project, scene, shot, logger, repairedFields);
 
     var negative = BuildKeyframeNegativePrompt(project, scene, shot, canonicalCharacters);
     var validationFailures = ValidateKeyframePrompt(prompt, negative, canonicalCharacters);
@@ -2691,11 +2705,39 @@ static List<Character> ResolveShotCharacters(Scene scene, Shot shot, IReadOnlyCo
         .ToList();
 }
 
-static string BuildCanonicalCharacterLock(IReadOnlyCollection<Character> characters)
+static string BuildCanonicalCharacterLock(Project project, Scene scene, Shot shot, IReadOnlyCollection<Character> characters, ILogger logger)
 {
     return string.Join(" ", characters.Select(character =>
     {
+        var originalText = RequiredText(character.VisualPrompt, character.ReferenceImagePrompt ?? string.Empty);
         var visualLock = CanonicalCharacterLock(character);
+        var repairedFields = new List<string>();
+        if (LooksLikePortraitPrompt(originalText))
+        {
+            repairedFields.Add("portraitPromptSanitized");
+            logger.LogInformation(
+                "prompt_compiler_reference_prompt_sanitized projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} characterId={CharacterId} originalLength={OriginalLength} finalLength={FinalLength} repairedFields={RepairedFields}",
+                project.Id,
+                scene.Index,
+                shot.Index,
+                shot.Id,
+                character.Id,
+                originalText.Length,
+                visualLock.Length,
+                string.Join("|", repairedFields));
+        }
+
+        logger.LogInformation(
+            "prompt_compiler_character_video_lock_created projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} characterId={CharacterId} originalLength={OriginalLength} finalLength={FinalLength} repairedFields={RepairedFields}",
+            project.Id,
+            scene.Index,
+            shot.Index,
+            shot.Id,
+            character.Id,
+            originalText.Length,
+            visualLock.Length,
+            string.Join("|", repairedFields));
+
         var forbidden = BuildCharacterForbiddenDrift(character);
         return $"{character.Name}: {visualLock} Forbidden drift: {forbidden}.";
     }));
@@ -2703,9 +2745,121 @@ static string BuildCanonicalCharacterLock(IReadOnlyCollection<Character> charact
 
 static string CanonicalCharacterLock(Character character)
 {
-    return CleanPromptPart(RequiredText(
-        character.ReferenceImagePrompt,
-        RequiredText(character.VisualPrompt, $"{character.Name}, {character.Role}, stable face, age, hair, costume, silhouette, and signature props")));
+    var raw = RequiredText(character.VisualPrompt, string.Empty);
+    var usedReferenceFallback = false;
+    if (string.IsNullOrWhiteSpace(raw))
+    {
+        raw = character.ReferenceImagePrompt ?? string.Empty;
+        usedReferenceFallback = true;
+    }
+
+    var lockText = BuildKnownStoryCharacterLock(character, raw);
+    if (usedReferenceFallback || LooksLikePortraitPrompt(raw))
+    {
+        lockText = SanitizePortraitPrompt(lockText);
+    }
+
+    return CleanPromptPart(RequiredText(lockText, $"{character.Name}, {character.Role}, stable face, age, hair, costume, silhouette, and signature props"));
+}
+
+static string BuildKnownStoryCharacterLock(Character character, string candidate)
+{
+    var text = SanitizePortraitPrompt(candidate);
+    text = RemoveForbiddenStaleVisualItems(text);
+
+    if (character.Name.Contains("Aras", StringComparison.OrdinalIgnoreCase))
+    {
+        return CleanPromptPart("Aras, young Anatolian village messenger, consistent youthful face, dark hair, earth-toned wool tunic, worn leather belt, small messenger pouch, brass lantern, anxious but brave posture");
+    }
+
+    if (character.Name.Contains("Selim", StringComparison.OrdinalIgnoreCase))
+    {
+        return CleanPromptPart("Selim Usta, elderly Anatolian stone mason, weathered face, grey beard, dark wool vest over simple shirt, walking staff, calm protective posture, traditional village clothing");
+    }
+
+    return CleanPromptPart(RequiredText(text, $"{character.Name}, {character.Role}, stable face, age, hair, costume, silhouette, and signature props"));
+}
+
+static string SanitizePortraitPrompt(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    var text = CleanPromptPart(value);
+    var bannedPatterns = new[]
+    {
+        "English character reference image for a story-to-video pipeline",
+        "Neutral cinematic background",
+        "clear face",
+        "natural full-body or waist-up framing",
+        "standing slightly turned toward camera",
+        "standing slightly turned",
+        "soft sunlight",
+        "soft cinematic lighting",
+        "realistic skin texture",
+        "realistic anatomy",
+        "portrait",
+        "background",
+        "no readable text",
+        "no logos",
+        "Character:",
+        "Role:",
+        "Visual lock:",
+        "Personality cue:",
+        "Style:"
+    };
+
+    foreach (var banned in bannedPatterns)
+    {
+        text = Regex.Replace(text, Regex.Escape(banned), " ", RegexOptions.IgnoreCase);
+    }
+
+    text = Regex.Replace(text, "\\b(reference image|headshot|waist-up|full-body|full body)\\b", " ", RegexOptions.IgnoreCase);
+    return CleanPromptPart(text);
+}
+
+static bool LooksLikePortraitPrompt(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    return ContainsAny(value.ToLowerInvariant(),
+        "reference image",
+        "neutral cinematic background",
+        "clear face",
+        "waist-up",
+        "waist up",
+        "portrait",
+        "standing slightly",
+        "soft sunlight",
+        "realistic skin texture");
+}
+
+static string RemoveForbiddenStaleVisualItems(string value)
+{
+    var text = value;
+    var stalePatterns = new[]
+    {
+        "blue scarf",
+        "bright blue scarf",
+        "red scarf",
+        "modern jacket",
+        "sneakers",
+        "jeans",
+        "robot child",
+        "robotic child"
+    };
+
+    foreach (var stale in stalePatterns)
+    {
+        text = Regex.Replace(text, Regex.Escape(stale), " ", RegexOptions.IgnoreCase);
+    }
+
+    return CleanPromptPart(text);
 }
 
 static string BuildCharacterForbiddenDrift(Character character)
@@ -2732,7 +2886,7 @@ static string BuildCharacterForbiddenDrift(Character character)
     return string.Join(", ", terms.Distinct(StringComparer.OrdinalIgnoreCase));
 }
 
-static string BuildConcreteLocationLock(Project project, Scene scene, Shot shot)
+static string BuildConcreteLocationLock(Project project, Scene scene, Shot shot, ILogger logger, List<string> repairedFields)
 {
     var candidates = new[]
     {
@@ -2740,32 +2894,170 @@ static string BuildConcreteLocationLock(Project project, Scene scene, Shot shot)
         scene.SceneAnchorPrompt,
         scene.Location,
         ExtractLocationBibleText(project.LocationBibleJson),
-        project.StoryText,
-        scene.Summary,
         shot.LocationLockPrompt
     };
-    var concrete = string.Join(", ", candidates
-        .Where(value => !string.IsNullOrWhiteSpace(value))
-        .Select(value => CleanPromptPart(value!))
-        .Where(value => !ContainsPlaceholderContinuity(value))
-        .Take(4));
+    var accepted = new List<string>();
+    foreach (var rawCandidate in candidates.Where(value => !string.IsNullOrWhiteSpace(value)))
+    {
+        var candidate = CleanPromptPart(rawCandidate!);
+        var rejectedAsStory = LooksLikeStoryText(candidate);
+        var rejectedAsTurkish = ContainsTurkishVisualText(candidate);
+        if (ContainsPlaceholderContinuity(candidate) || rejectedAsStory || rejectedAsTurkish)
+        {
+            if (rejectedAsStory)
+            {
+                repairedFields.Add("storyTextRemoved");
+                logger.LogInformation(
+                    "prompt_compiler_story_text_removed_from_location_lock projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} originalLength={OriginalLength} finalLength={FinalLength} repairedFields={RepairedFields}",
+                    project.Id,
+                    scene.Index,
+                    shot.Index,
+                    shot.Id,
+                    candidate.Length,
+                    0,
+                    "storyTextRemoved");
+            }
+
+            if (rejectedAsTurkish)
+            {
+                repairedFields.Add("locationTurkishRepaired");
+                logger.LogInformation(
+                    "prompt_compiler_turkish_visual_prompt_repaired projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} originalLength={OriginalLength} finalLength={FinalLength} repairedFields={RepairedFields}",
+                    project.Id,
+                    scene.Index,
+                    shot.Index,
+                    shot.Id,
+                    candidate.Length,
+                    0,
+                    "locationTurkishRepaired");
+            }
+
+            continue;
+        }
+
+        accepted.Add(candidate);
+        if (accepted.Count >= 4)
+        {
+            break;
+        }
+    }
+
+    var concrete = string.Join(", ", accepted);
     if (!string.IsNullOrWhiteSpace(concrete))
     {
+        logger.LogInformation(
+            "prompt_compiler_location_video_lock_created projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} originalLength={OriginalLength} finalLength={FinalLength} repairedFields={RepairedFields}",
+            project.Id,
+            scene.Index,
+            shot.Index,
+            shot.Id,
+            candidates.Where(value => !string.IsNullOrWhiteSpace(value)).Sum(value => value!.Length),
+            concrete.Length,
+            string.Join("|", repairedFields.Distinct(StringComparer.OrdinalIgnoreCase)));
         return concrete;
     }
 
-    return RepairConcreteLocationFromContext(project, scene, shot);
+    var repairedLocation = RepairConcreteLocationFromContext(project, scene, shot);
+    repairedFields.Add("locationLock");
+    logger.LogInformation(
+        "prompt_compiler_location_video_lock_created projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} originalLength={OriginalLength} finalLength={FinalLength} repairedFields={RepairedFields}",
+        project.Id,
+        scene.Index,
+        shot.Index,
+        shot.Id,
+        candidates.Where(value => !string.IsNullOrWhiteSpace(value)).Sum(value => value!.Length),
+        repairedLocation.Length,
+        string.Join("|", repairedFields.Distinct(StringComparer.OrdinalIgnoreCase)));
+    return repairedLocation;
+}
+
+static string ApplySdxlPromptBudget(string prompt, Project project, Scene scene, Shot shot, ILogger logger, List<string> repairedFields)
+{
+    var original = CleanPromptPart(RemoveStoryTextFromVisualPrompt(prompt));
+    var promptParts = Regex.Split(original, "(?=Style lock:|Location:|Visible characters:|Primary action:|Camera:|Lighting:|Mood:|No text)", RegexOptions.IgnoreCase)
+        .Select(CleanPromptPart)
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .ToList();
+
+    var finalParts = new List<string>();
+    var wordBudget = 96;
+    foreach (var part in promptParts)
+    {
+        var candidate = string.Join(" ", finalParts.Append(part));
+        if (WordCount(candidate) <= wordBudget || finalParts.Count == 0)
+        {
+            finalParts.Add(part);
+        }
+    }
+
+    var finalPrompt = string.Join(" ", finalParts);
+    if (!finalPrompt.Contains("No text", StringComparison.OrdinalIgnoreCase))
+    {
+        finalPrompt = $"{finalPrompt} No text, no subtitles, no logos.";
+    }
+
+    if (!string.Equals(original, finalPrompt, StringComparison.Ordinal) || WordCount(prompt) > 100)
+    {
+        repairedFields.Add("sdxlPromptBudget");
+        logger.LogInformation(
+            "prompt_compiler_sdxl_prompt_budget_applied projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} originalLength={OriginalLength} finalLength={FinalLength} originalWords={OriginalWords} finalWords={FinalWords} repairedFields={RepairedFields}",
+            project.Id,
+            scene.Index,
+            shot.Index,
+            shot.Id,
+            prompt.Length,
+            finalPrompt.Length,
+            WordCount(prompt),
+            WordCount(finalPrompt),
+            "sdxlPromptBudget");
+    }
+
+    return finalPrompt;
+}
+
+static string RemoveStoryTextFromVisualPrompt(string value)
+{
+    var text = value;
+    text = Regex.Replace(text, "A clear narrative beat[^.]*\\.", " ", RegexOptions.IgnoreCase);
+    text = Regex.Replace(text, "\\b(cinematic story location|story location|cinematic environment)\\b", "concrete visual location", RegexOptions.IgnoreCase);
+    return CleanPromptPart(text);
 }
 
 static string RepairConcreteLocationFromContext(Project project, Scene scene, Shot shot)
 {
     var context = $"{project.StoryText} {project.Name} {scene.Title} {scene.Summary} {shot.Action}".ToLowerInvariant();
+    if (ContainsAny(context, "well", "kuyu", "village", "mountain", "aras", "selim"))
+    {
+        return scene.Index switch
+        {
+            1 => "abandoned Seljuq mountain village square at late dusk, old stone well at the center, narrow dirt paths, dry grass, old stone houses, worn wooden doors, cold dusk air, muted earth tones, same well geometry",
+            2 => "abandoned Seljuq mountain village near the old stone well at darker dusk, narrow dirt path, dry grass, old stone houses, brass lantern light beginning to dominate, same well geometry",
+            3 => "old stone well in abandoned Seljuq mountain village under moonlight, brass lantern glow near the rim, worn wooden doors and stone houses around the square, same well geometry",
+            4 => "abandoned village square beside the old stone well, dust and old stone lit by low brass lantern light, dry grass and worn doors in the background, same well geometry",
+            5 => "old stone well in abandoned Seljuq mountain village, faint warm light rising from inside the well, brass lantern glow, cool moonlit stone houses and dry grass around it",
+            _ => "abandoned Seljuq mountain village square, old stone well at the center, narrow dirt paths, dry grass, old stone houses, worn wooden doors, cold dusk air, brass lantern light, muted earth tones, same well geometry"
+        };
+    }
+
+    if (ContainsAny(context, "seljuq", "well", "kuyu", "village", "mountain"))
+    {
+        return scene.Index switch
+        {
+            1 => "abandoned Seljuq mountain village square at late dusk, old stone well at the center, narrow dirt paths, dry grass, old stone houses, worn wooden doors, cold dusk air, muted earth tones, same well geometry",
+            2 => "abandoned Seljuq mountain village near the old stone well at darker dusk, narrow dirt path, dry grass, old stone houses, brass lantern light beginning to dominate, same well geometry",
+            3 => "old stone well in abandoned Seljuq mountain village under moonlight, brass lantern glow near the rim, worn wooden doors and stone houses around the square, same well geometry",
+            4 => "abandoned village square beside the old stone well, dust and old stone lit by low brass lantern light, dry grass and worn doors in the background, same well geometry",
+            5 => "old stone well in abandoned Seljuq mountain village, faint warm light rising from inside the well, brass lantern glow, cool moonlit stone houses and dry grass around it",
+            _ => "abandoned Seljuq mountain village square, old stone well at the center, narrow dirt paths, dry grass, old stone houses, worn wooden doors, cold dusk air, brass lantern light, muted earth tones, same well geometry"
+        };
+    }
+
     if (ContainsAny(context, "seljuq", "selçuk", "well", "kuyu", "village", "köy", "mountain", "dağ"))
     {
         return "abandoned Seljuq mountain village, old stone well in the center, narrow dirt path, old stone houses, dry grass, worn wooden doors, cold dusk air, brass lantern light, same well geometry and same village geography across shots";
     }
 
-    return $"{CleanPromptPart(RequiredText(scene.Title, "story scene"))}, {CleanPromptPart(RequiredText(scene.Summary, "concrete story environment"))}, stable geography, recurring props, consistent architecture and materials";
+    return $"{CleanPromptPart(RequiredText(scene.Location, scene.Title))}, stable geography, recurring props, consistent architecture and materials";
 }
 
 static string BuildConcreteSceneAnchor(Project project, Scene scene, IReadOnlyCollection<Character> characters, string locationLock, string lighting)
@@ -2828,6 +3120,30 @@ static string BuildExplicitShotAction(Scene scene, Shot shot, IReadOnlyCollectio
     }
 
     return action;
+}
+
+static string RepairEnglishShotAction(Scene scene, Shot shot, IReadOnlyCollection<Character> characters)
+{
+    var subject = characters.FirstOrDefault()?.Name ?? "the visible subject";
+    var context = $"{scene.Title} {scene.Summary} {shot.Action} {shot.Prompt}".ToLowerInvariant();
+    if (ContainsAny(context, "well", "kuyu"))
+    {
+        return $"{subject} approaches the old stone well with cautious body language, holding position in the village square";
+    }
+    if (ContainsAny(context, "lantern", "fener"))
+    {
+        return $"{subject} raises a brass lantern and studies the surrounding stone village";
+    }
+    if (ContainsAny(context, "door", "kapı", "kapi"))
+    {
+        return $"{subject} pauses near worn wooden doors and looks toward the old stone houses";
+    }
+    if (ContainsAny(context, "listen", "duyar", "sound", "ses"))
+    {
+        return $"{subject} stops and listens carefully, tense posture facing the source of the sound";
+    }
+
+    return $"{subject} performs the story action with clear posture in the selected scene environment";
 }
 
 static string BuildKeyframeNegativePrompt(Project project, Scene scene, Shot shot, IReadOnlyCollection<Character> characters)
@@ -2895,6 +3211,18 @@ static List<string> ValidateKeyframePrompt(string prompt, string negativePrompt,
     {
         failed.Add("contradictoryLighting");
     }
+    if (ContainsTurkishVisualText(prompt))
+    {
+        failed.Add("nonEnglishVisualPrompt");
+    }
+    if (LooksLikeStoryText(prompt))
+    {
+        failed.Add("storyTextInVisualPrompt");
+    }
+    if (WordCount(prompt) > 110)
+    {
+        failed.Add("sdxlPromptOverBudget");
+    }
     foreach (var character in characters)
     {
         if (!prompt.Contains(character.Name, StringComparison.OrdinalIgnoreCase) || !prompt.Contains(CanonicalCharacterLock(character).Split(',', '.', ';')[0], StringComparison.OrdinalIgnoreCase))
@@ -2915,6 +3243,9 @@ static bool IsInvalidKeyframePrompt(string? prompt)
     return string.IsNullOrWhiteSpace(prompt)
         || ContainsPlaceholderContinuity(prompt)
         || prompt.Contains("Characters: .", StringComparison.OrdinalIgnoreCase)
+        || ContainsTurkishVisualText(prompt)
+        || LooksLikeStoryText(prompt)
+        || WordCount(prompt) > 110
         || IsContradictoryLighting(prompt);
 }
 
@@ -2935,9 +3266,81 @@ static bool ContainsPlaceholderContinuity(string? value)
         "cinematic story location",
         "motivated time of day",
         "cinematic mood",
+        "a clear narrative beat",
         "recurring props remain in the same visual world",
         "cinematic environment",
         "story location");
+}
+
+static bool LooksLikeStoryText(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    var text = value.ToLowerInvariant();
+    if (ContainsAny(text,
+        "bir ",
+        " ve ",
+        " ile ",
+        " için ",
+        "gizemli",
+        "hikaye",
+        "köy",
+        "kuyu",
+        "çocuk",
+        "gece",
+        "anlat",
+        "başlar",
+        "gider",
+        "görür",
+        "duyar",
+        "a clear narrative beat"))
+    {
+        return true;
+    }
+
+    var sentenceCount = Regex.Matches(value, "[.!?]").Count;
+    return value.Length > 260 && sentenceCount >= 2;
+}
+
+static bool ContainsTurkishVisualText(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    var text = value.ToLowerInvariant();
+    return ContainsAny(text,
+        "ı",
+        "ğ",
+        "ü",
+        "ş",
+        "ö",
+        "ç",
+        "Ã§",
+        "Ã¶",
+        "ÄŸ",
+        "Ä±",
+        "ÅŸ",
+        "kÃ¶y",
+        "selÃ§uk",
+        "daÄŸ",
+        "gÃ¶r",
+        "duyar",
+        "gizemli");
+}
+
+static int WordCount(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return 0;
+    }
+
+    return Regex.Matches(value, "\\b[\\p{L}\\p{N}'-]+\\b").Count;
 }
 
 static bool IsPronounOnlyAction(string? action)

@@ -136,27 +136,30 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
    * visual prompts and negative prompts are kept in English
    * generated start image prompts include character locks and location continuity
 
-   The canonical character lock used by storyboard/keyframe prompts is:
+   The canonical character lock used by storyboard/keyframe prompts is a video lock, not the raw portrait-generation prompt:
 
-   1. the user-edited Cast reference prompt when present
-   2. otherwise `Character.VisualPrompt`
+   1. `Character.VisualPrompt` / character bible identity details
+   2. a sanitized Cast reference prompt only when no cleaner visual lock exists
    3. otherwise a deterministic fallback from character name/role
 
-   Saving a Cast reference prompt also synchronizes the character visual prompt and continuity rules so later storyboard prompt repair uses the corrected cast lock, not stale director text. This prevents old details, such as removed clothing or props, from leaking back into keyframe prompts.
+   `Character.ReferenceImagePrompt` is primarily a portrait/reference-image prompt. If it is the only available source for storyboard repair, the prompt compiler strips portrait-only phrases such as neutral background, clear face, portrait framing, soft sunlight, and similar image-generation staging text before it becomes a video lock. This keeps age, face, hair, beard, costume, silhouette, and props while preventing portrait setup text from leaking into Wan/SDXL storyboard prompts.
 
-   Storyboard keyframe prompts are compiled from a concise structure:
+   Saving a Cast reference prompt can still synchronize the character visual prompt and continuity rules, but storyboard prompt repair treats portrait prompt text as a fallback source that must be sanitized. This prevents old details, such as removed clothing or props, from leaking back into keyframe prompts.
+
+   Storyboard keyframe prompts are compiled from a concise visual-only structure:
 
    * style lock
-   * concrete location lock
+   * concise English concrete location lock
    * visible characters with canonical locks and forbidden drift
    * one explicit primary action
-   * continuity from the previous shot
    * camera/framing
    * one coherent lighting setup
    * mood
    * no text/subtitles/logos
 
-   Generic placeholders such as `cinematic story location`, `motivated time of day`, `cinematic mood`, and empty `Characters: .` text are invalid. If the Location Bible is too generic, the compiler repairs it from story, scene, and shot context. Mystery/well stories are repaired toward concrete geography such as an abandoned Seljuq mountain village, old stone well, narrow dirt path, old stone houses, dry grass, worn doors, lantern light, and stable well/village geometry.
+   Extended continuity notes remain saved as metadata, but they are not dumped wholesale into the SDXL keyframe prompt. The compiler applies a short prompt budget of roughly 75-100 English words so SDXL receives the image instructions, not the entire continuity bible.
+
+   Generic placeholders such as `cinematic story location`, `A clear narrative beat`, `motivated time of day`, `cinematic mood`, and empty `Characters: .` text are invalid. Full story prose and Turkish narrative text are not valid location locks. If the Location Bible is too generic or polluted with prose, the compiler repairs it into concise English visual geography. Mystery/well stories are repaired toward concrete geography such as an abandoned Seljuq mountain village, old stone well, narrow dirt path, old stone houses, dry grass, worn doors, lantern light, and stable well/village geometry.
 
    Lighting is normalized to one coherent setup per scene/shot. Contradictory bundles such as daylight plus golden hour plus midday plus moonlight are removed before keyframe prompts are saved.
 
@@ -171,6 +174,12 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
    Prompt repair/validation logs include:
 
    * `prompt_compiler_character_lock_validation_started`
+   * `prompt_compiler_reference_prompt_sanitized`
+   * `prompt_compiler_character_video_lock_created`
+   * `prompt_compiler_location_video_lock_created`
+   * `prompt_compiler_turkish_visual_prompt_repaired`
+   * `prompt_compiler_sdxl_prompt_budget_applied`
+   * `prompt_compiler_story_text_removed_from_location_lock`
    * `prompt_compiler_character_lock_validation_failed`
    * `prompt_compiler_location_lock_validation_failed`
    * `prompt_compiler_lighting_normalization_applied`

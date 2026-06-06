@@ -35,13 +35,25 @@ function containsGenericPromptText(value) {
   const text = String(value).toLowerCase();
   return [
     "cinematic story location",
+    "a clear narrative beat",
     "motivated time of day",
     "cinematic mood",
     "characters: .",
     "visible characters: .",
     "wrong scene index",
-    "wrong shot action"
+    "wrong shot action",
+    "gizemli",
+    "köy",
+    "kuyu",
+    "çocuk",
+    "bir ",
+    " ve "
   ].some((term) => text.includes(term));
+}
+
+function wordCount(value) {
+  if (!value) return 0;
+  return String(value).trim().split(/\s+/).filter(Boolean).length;
 }
 
 function extractPromptField(prompt, label) {
@@ -325,6 +337,7 @@ function ShotPreview({ shot, jobs, onUploadStartImage }) {
 function ShotInspector({
   shot,
   jobs,
+  planCharacters = [],
   useShotStartImage,
   renderDurationMode,
   useCharacterReferenceInPrompt,
@@ -380,9 +393,15 @@ function ShotInspector({
   const selectedProfileBlocked = requiresKeyframe && !hasKeyframe;
   const animateMissingBlocked = requiresKeyframe && missingKeyframeCount > 0;
   const promptHasGenericText = containsGenericPromptText(draft.startImagePrompt) || containsGenericPromptText(draft.startImageNegativePrompt);
+  const promptWordCount = wordCount(draft.startImagePrompt);
+  const promptOverBudget = promptWordCount > 100;
   const canonicalCharacterLock = shot.characterLockPrompt || extractPromptField(draft.startImagePrompt, "Visible characters") || (characters.length ? characters.join(", ") : "No visible character lock.");
-  const concreteLocationLock = shot.locationLockPrompt || extractPromptField(draft.startImagePrompt, "Concrete location") || shot.sceneLocation || "No concrete location lock.";
+  const concreteLocationLock = shot.locationLockPrompt || extractPromptField(draft.startImagePrompt, "Location") || extractPromptField(draft.startImagePrompt, "Concrete location") || shot.sceneLocation || "No concrete location lock.";
   const lightingSetup = extractPromptField(draft.startImagePrompt, "Lighting") || "Not available";
+  const extendedContinuityNotes = shot.keyframeContinuityPrompt || shot.continuityNotes || shot.previousShotVisualState || shot.currentShotVisualState || "Not available";
+  const characterReferencePrompts = (planCharacters || [])
+    .filter((character) => characters.some((name) => String(name).toLowerCase() === String(character.name).toLowerCase()))
+    .map((character) => `${character.name}: ${character.referenceImagePrompt || "No reference prompt yet."}`);
 
   return (
     <aside className="storyboard-inspector">
@@ -408,13 +427,19 @@ function ShotInspector({
       <div className="storyboard-inspector-section">
         <h3>Continuity Locks Used</h3>
         <p>
-          <b>Character lock:</b> {compactText(canonicalCharacterLock, 260)}
+          <b>Character video lock:</b> {compactText(canonicalCharacterLock, 260)}
         </p>
         <p>
-          <b>Location lock:</b> {compactText(concreteLocationLock, 260)}
+          <b>Character reference prompt:</b> {characterReferencePrompts.length ? compactText(characterReferencePrompts.join(" "), 260) : "No matching reference prompt available."}
+        </p>
+        <p>
+          <b>Location video lock:</b> {compactText(concreteLocationLock, 260)}
         </p>
         <p>
           <b>Lighting:</b> {compactText(lightingSetup, 180)}
+        </p>
+        <p>
+          <b>Extended continuity notes:</b> {compactText(extendedContinuityNotes, 220)}
         </p>
         {promptHasGenericText ? (
           <p className="msg error compact-msg">This keyframe prompt contains generic placeholder continuity text. Repair prompts before rendering.</p>
@@ -449,6 +474,9 @@ function ShotInspector({
 
       <div className="storyboard-inspector-section">
         <h3>Keyframe Prompt</h3>
+        <p className={promptOverBudget ? "msg error compact-msg" : "muted"}>
+          SDXL prompt budget: {promptWordCount}/100 words. This is the concise keyframe prompt actually sent to image generation.
+        </p>
         <textarea
           rows={6}
           value={draft.startImagePrompt}
@@ -469,6 +497,9 @@ function ShotInspector({
             Copy Prompt
           </button>
         </div>
+        <p className="muted">
+          <b>SDXL keyframe prompt actually sent:</b> {compactText(draft.startImagePrompt, 260)}
+        </p>
       </div>
 
       <div className="storyboard-inspector-section">
@@ -836,6 +867,7 @@ export default function StoryboardStep({
         <ShotInspector
           shot={selectedShot}
           jobs={selectedJobs}
+          planCharacters={plan?.characters || []}
           useShotStartImage={useShotStartImage}
           renderDurationMode={renderDurationMode}
           useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
