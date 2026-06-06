@@ -166,7 +166,16 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
    * `duplicateNegativePromptGroups`
    * `continuityWarning`
 
-10. Existing projects created before these continuity/duration rules can be repaired by running Analyze again or by using the director-plan repair action. Analyze replaces storyboard plan records safely while preserving completed final videos and generated media files on disk. Director-plan repair expands the current saved plan in place, keeps existing characters/scenes/shots where possible, preserves generated character references and shot start images, and cancels only replaceable pending video render jobs.
+10. Existing projects created before these continuity/duration rules can be repaired by running Analyze again or by using the director-plan repair action. Analyze replaces storyboard plan records safely while preserving completed final videos and generated media files on disk. Director-plan repair is transaction-scoped and idempotent: it snapshots the current project, builds the repaired plan in memory, detaches historical jobs/assets from old storyboard rows, deletes old dialogue/shot/scene rows, inserts a fresh repaired storyboard, and commits only after the replacement is valid.
+
+   Director-plan repair preserves:
+
+   * character records and character reference image paths
+   * generated/uploaded media files on disk
+   * completed render output files and final videos
+   * historical render rows, with old storyboard foreign keys detached when old shots are replaced
+
+   If storyboard rows change during repair, the API rolls back and returns a clear conflict response asking the user to reload and retry.
 
    Repair/regenerate endpoints:
 

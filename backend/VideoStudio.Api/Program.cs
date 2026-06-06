@@ -1983,24 +1983,25 @@ app.Run();
 
 static async Task<IResult> RepairDirectorPlanAsync(Guid id, VideoStudioDbContext db, ProductionPlanMapper mapper, ProductionPlanNormalizer normalizer, ILogger<Program> logger, CancellationToken cancellationToken)
 {
-    var project = await db.Projects
+    var projectSnapshot = await db.Projects
+        .AsNoTracking()
         .Include(p => p.Characters)
         .Include(p => p.Scenes).ThenInclude(s => s.Shots)
-        .Include(p => p.RenderJobs)
         .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
-    if (project is null)
+    if (projectSnapshot is null)
     {
         return Results.NotFound();
     }
 
-    if (project.Scenes.Count == 0)
+    if (projectSnapshot.Scenes.Count == 0)
     {
         return Results.BadRequest("Analyze the story before repairing the director plan.");
     }
 
-    var currentPlan = mapper.FromProject(project);
+    var currentPlan = mapper.FromProject(projectSnapshot);
     var currentRules = GetProjectDurationRules(currentPlan.TargetDurationSeconds);
     var repairedPlan = normalizer.RepairDirectorDurationPlan(currentPlan, id);
+    var repairedIssue = GetProductionPlanDurationIssue(repairedPlan);
     logger.LogInformation(
         "director_plan_regenerate_requested projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} plannedDurationSeconds={PlannedDurationSeconds} coveragePercent={CoveragePercent} sceneCount={SceneCount} shotCount={ShotCount} minimumScenes={MinimumScenes} minimumShots={MinimumShots} targetSceneRange={TargetSceneMin}-{TargetSceneMax} targetShotRange={TargetShotMin}-{TargetShotMax}",
         id,
@@ -2016,22 +2017,164 @@ static async Task<IResult> RepairDirectorPlanAsync(Guid id, VideoStudioDbContext
         currentRules.targetShotMin,
         currentRules.targetShotMax);
 
-    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-
-    var now = DateTimeOffset.UtcNow;
-    foreach (var job in project.RenderJobs.Where(j => j.JobType == RenderJobType.RenderVideo && j.Status == RenderJobStatus.Pending))
+    if (repairedIssue is not null)
     {
-        job.Status = RenderJobStatus.Canceled;
-        job.ErrorMessage = "Cancelled because the director plan was repaired.";
-        job.FinishedAt = now;
+        return Results.BadRequest(new
+        {
+            error = "Repair plan did not produce a valid duration plan. Analyze the story again before rendering.",
+            durationIssue = repairedIssue
+        });
     }
 
-    ApplyProductionPlanInPlace(project, repairedPlan, mapper);
-    project.Status = ProjectStatus.ReadyForRender;
-    project.UpdatedAt = now;
+    var oldSceneCount = projectSnapshot.Scenes.Count;
+    var oldShotCount = projectSnapshot.Scenes.Sum(s => s.Shots.Count);
+    var oldPlannedDurationSeconds = projectSnapshot.Scenes.Sum(s => s.Shots.Sum(sh => Math.Max(0, sh.DurationSeconds)));
+    var newSceneCount = repairedPlan.SceneCount;
+    var newShotCount = repairedPlan.ShotCount;
+    var newPlannedDurationSeconds = repairedPlan.TotalPlannedDurationSeconds;
+    var coveragePercent = repairedPlan.PlannedDurationCoveragePercent;
+    logger.LogInformation(
+        "director_duration_repair_started projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} oldSceneCount={OldSceneCount} oldShotCount={OldShotCount} newSceneCount={NewSceneCount} newShotCount={NewShotCount} oldPlannedDurationSeconds={OldPlannedDurationSeconds} newPlannedDurationSeconds={NewPlannedDurationSeconds} coveragePercent={CoveragePercent}",
+        id,
+        repairedPlan.TargetDurationSeconds,
+        oldSceneCount,
+        oldShotCount,
+        newSceneCount,
+        newShotCount,
+        oldPlannedDurationSeconds,
+        newPlannedDurationSeconds,
+        coveragePercent);
 
-    await db.SaveChangesAsync(cancellationToken);
-    await transaction.CommitAsync(cancellationToken);
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+    try
+    {
+        var now = DateTimeOffset.UtcNow;
+        var projectExists = await db.Projects.AsNoTracking().AnyAsync(p => p.Id == id, cancellationToken);
+        if (!projectExists)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.NotFound();
+        }
+
+        logger.LogInformation(
+            "director_duration_repair_delete_old_storyboard_started projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} oldSceneCount={OldSceneCount} oldShotCount={OldShotCount} oldPlannedDurationSeconds={OldPlannedDurationSeconds}",
+            id,
+            repairedPlan.TargetDurationSeconds,
+            oldSceneCount,
+            oldShotCount,
+            oldPlannedDurationSeconds);
+
+        await db.RenderJobs
+            .Where(j => j.ProjectId == id
+                && j.Status != RenderJobStatus.Completed
+                && (j.SceneId != null || j.ShotId != null || j.DialogueLineId != null))
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(j => j.Status, RenderJobStatus.Canceled)
+                .SetProperty(j => j.ErrorMessage, "Cancelled because the director plan was repaired.")
+                .SetProperty(j => j.FinishedAt, now), cancellationToken);
+
+        await db.RenderJobs
+            .Where(j => j.ProjectId == id && (j.SceneId != null || j.ShotId != null || j.DialogueLineId != null))
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(j => j.SceneId, (Guid?)null)
+                .SetProperty(j => j.ShotId, (Guid?)null)
+                .SetProperty(j => j.DialogueLineId, (Guid?)null), cancellationToken);
+
+        await db.Assets
+            .Where(a => a.ProjectId == id && a.ShotId != null)
+            .ExecuteUpdateAsync(updates => updates.SetProperty(a => a.ShotId, (Guid?)null), cancellationToken);
+
+        await db.DialogueLines.Where(d => d.ProjectId == id).ExecuteDeleteAsync(cancellationToken);
+        await db.Shots.Where(s => s.ProjectId == id).ExecuteDeleteAsync(cancellationToken);
+        await db.Scenes.Where(s => s.ProjectId == id).ExecuteDeleteAsync(cancellationToken);
+
+        logger.LogInformation(
+            "director_duration_repair_delete_old_storyboard_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} oldSceneCount={OldSceneCount} oldShotCount={OldShotCount} oldPlannedDurationSeconds={OldPlannedDurationSeconds}",
+            id,
+            repairedPlan.TargetDurationSeconds,
+            oldSceneCount,
+            oldShotCount,
+            oldPlannedDurationSeconds);
+
+        db.ChangeTracker.Clear();
+
+        var projectUpdate = mapper.BuildProjectUpdate(repairedPlan);
+        var updatedRows = await db.Projects
+            .Where(p => p.Id == id)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(p => p.Name, projectUpdate.Title)
+                .SetProperty(p => p.Logline, projectUpdate.Logline)
+                .SetProperty(p => p.Genre, projectUpdate.Genre)
+                .SetProperty(p => p.TargetDurationSeconds, projectUpdate.TargetDurationSeconds)
+                .SetProperty(p => p.VisualStylePrompt, projectUpdate.VisualStylePrompt)
+                .SetProperty(p => p.NegativePrompt, projectUpdate.NegativePrompt)
+                .SetProperty(p => p.CameraStyle, projectUpdate.CameraStyle)
+                .SetProperty(p => p.LightingStyle, projectUpdate.LightingStyle)
+                .SetProperty(p => p.ColorPalette, projectUpdate.ColorPalette)
+                .SetProperty(p => p.AudioCuesJson, projectUpdate.AudioCuesJson)
+                .SetProperty(p => p.DirectorTreatment, projectUpdate.DirectorTreatment)
+                .SetProperty(p => p.BeatSheetJson, projectUpdate.BeatSheetJson)
+                .SetProperty(p => p.ActBreakdownJson, projectUpdate.ActBreakdownJson)
+                .SetProperty(p => p.CharacterBibleJson, projectUpdate.CharacterBibleJson)
+                .SetProperty(p => p.LocationBibleJson, projectUpdate.LocationBibleJson)
+                .SetProperty(p => p.TimelineContinuityJson, projectUpdate.TimelineContinuityJson)
+                .SetProperty(p => p.VisualContinuityRulesJson, projectUpdate.VisualContinuityRulesJson)
+                .SetProperty(p => p.RenderStrategyRecommendationJson, projectUpdate.RenderStrategyRecommendationJson)
+                .SetProperty(p => p.QualityGoal, projectUpdate.QualityGoal)
+                .SetProperty(p => p.Status, ProjectStatus.ReadyForRender)
+                .SetProperty(p => p.UpdatedAt, now), cancellationToken);
+
+        if (updatedRows == 0)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.NotFound();
+        }
+
+        UpsertDirectorPlanCharacters(id, repairedPlan, mapper, db);
+
+        var scenes = mapper.BuildScenes(id, repairedPlan);
+        var dialogueLines = mapper.BuildDialogueLines(id, repairedPlan, scenes);
+
+        logger.LogInformation(
+            "director_duration_repair_insert_new_storyboard_started projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} newSceneCount={NewSceneCount} newShotCount={NewShotCount} newPlannedDurationSeconds={NewPlannedDurationSeconds} coveragePercent={CoveragePercent}",
+            id,
+            repairedPlan.TargetDurationSeconds,
+            newSceneCount,
+            newShotCount,
+            newPlannedDurationSeconds,
+            coveragePercent);
+
+        db.Scenes.AddRange(scenes);
+        db.DialogueLines.AddRange(dialogueLines);
+        await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "director_duration_repair_insert_new_storyboard_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} newSceneCount={NewSceneCount} newShotCount={NewShotCount} newPlannedDurationSeconds={NewPlannedDurationSeconds} coveragePercent={CoveragePercent}",
+            id,
+            repairedPlan.TargetDurationSeconds,
+            newSceneCount,
+            newShotCount,
+            newPlannedDurationSeconds,
+            coveragePercent);
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+    catch (DbUpdateConcurrencyException ex)
+    {
+        await transaction.RollbackAsync(cancellationToken);
+        logger.LogWarning(
+            ex,
+            "director_duration_repair_concurrency_conflict projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} oldSceneCount={OldSceneCount} oldShotCount={OldShotCount} oldPlannedDurationSeconds={OldPlannedDurationSeconds}",
+            id,
+            repairedPlan.TargetDurationSeconds,
+            oldSceneCount,
+            oldShotCount,
+            oldPlannedDurationSeconds);
+        return Results.Conflict(new
+        {
+            error = "Repair plan failed because storyboard records changed during repair. Reload the project and try again."
+        });
+    }
 
     db.ChangeTracker.Clear();
     var savedProject = await db.Projects
@@ -2041,6 +2184,26 @@ static async Task<IResult> RepairDirectorPlanAsync(Guid id, VideoStudioDbContext
     if (savedProject is null)
     {
         return Results.NotFound();
+    }
+
+    var savedDurationIssue = GetProjectDurationPlanIssue(savedProject);
+    if (savedDurationIssue is not null)
+    {
+        logger.LogWarning(
+            "director_duration_validation_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} newSceneCount={NewSceneCount} newShotCount={NewShotCount} newPlannedDurationSeconds={NewPlannedDurationSeconds} coveragePercent={CoveragePercent} isValid=false",
+            id,
+            savedProject.TargetDurationSeconds,
+            savedProject.Scenes.Count,
+            savedProject.Scenes.Sum(s => s.Shots.Count),
+            savedProject.Scenes.Sum(s => s.Shots.Sum(sh => Math.Max(0, sh.DurationSeconds))),
+            savedProject.TargetDurationSeconds > 0
+                ? (int)Math.Round((double)savedProject.Scenes.Sum(s => s.Shots.Sum(sh => Math.Max(0, sh.DurationSeconds))) / savedProject.TargetDurationSeconds * 100)
+                : 0);
+        return Results.BadRequest(new
+        {
+            error = "Repair plan completed but the storyboard is still too short for the target duration. Analyze the story again before rendering.",
+            durationIssue = savedDurationIssue
+        });
     }
 
     var response = mapper.FromProject(savedProject);
@@ -2059,43 +2222,46 @@ static async Task<IResult> RepairDirectorPlanAsync(Guid id, VideoStudioDbContext
         responseRules.targetSceneMax,
         responseRules.targetShotMin,
         responseRules.targetShotMax);
+    logger.LogInformation(
+        "director_duration_repair_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} oldSceneCount={OldSceneCount} oldShotCount={OldShotCount} newSceneCount={NewSceneCount} newShotCount={NewShotCount} oldPlannedDurationSeconds={OldPlannedDurationSeconds} newPlannedDurationSeconds={NewPlannedDurationSeconds} coveragePercent={CoveragePercent}",
+        id,
+        response.TargetDurationSeconds,
+        oldSceneCount,
+        oldShotCount,
+        response.SceneCount,
+        response.ShotCount,
+        oldPlannedDurationSeconds,
+        response.TotalPlannedDurationSeconds,
+        response.PlannedDurationCoveragePercent);
+    logger.LogInformation(
+        "director_duration_validation_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} newSceneCount={NewSceneCount} newShotCount={NewShotCount} newPlannedDurationSeconds={NewPlannedDurationSeconds} coveragePercent={CoveragePercent} isValid=true",
+        id,
+        response.TargetDurationSeconds,
+        response.SceneCount,
+        response.ShotCount,
+        response.TotalPlannedDurationSeconds,
+        response.PlannedDurationCoveragePercent);
     return Results.Ok(response);
 }
 
-static void ApplyProductionPlanInPlace(Project project, ProductionPlanDto plan, ProductionPlanMapper mapper)
+static void UpsertDirectorPlanCharacters(Guid projectId, ProductionPlanDto plan, ProductionPlanMapper mapper, VideoStudioDbContext db)
 {
-    var projectUpdate = mapper.BuildProjectUpdate(plan);
-    project.Name = projectUpdate.Title;
-    project.Logline = projectUpdate.Logline;
-    project.Genre = projectUpdate.Genre;
-    project.TargetDurationSeconds = projectUpdate.TargetDurationSeconds;
-    project.VisualStylePrompt = projectUpdate.VisualStylePrompt;
-    project.NegativePrompt = projectUpdate.NegativePrompt;
-    project.CameraStyle = projectUpdate.CameraStyle;
-    project.LightingStyle = projectUpdate.LightingStyle;
-    project.ColorPalette = projectUpdate.ColorPalette;
-    project.AudioCuesJson = projectUpdate.AudioCuesJson;
-    project.DirectorTreatment = projectUpdate.DirectorTreatment;
-    project.BeatSheetJson = projectUpdate.BeatSheetJson;
-    project.ActBreakdownJson = projectUpdate.ActBreakdownJson;
-    project.CharacterBibleJson = projectUpdate.CharacterBibleJson;
-    project.LocationBibleJson = projectUpdate.LocationBibleJson;
-    project.TimelineContinuityJson = projectUpdate.TimelineContinuityJson;
-    project.VisualContinuityRulesJson = projectUpdate.VisualContinuityRulesJson;
-    project.RenderStrategyRecommendationJson = projectUpdate.RenderStrategyRecommendationJson;
-    project.QualityGoal = projectUpdate.QualityGoal;
-
-    var plannedCharacters = mapper.BuildCharacters(project.Id, plan);
+    var existingCharacters = db.Characters.Where(c => c.ProjectId == projectId).ToList();
+    var plannedCharacters = mapper.BuildCharacters(projectId, plan);
     foreach (var planned in plannedCharacters)
     {
-        var existing = project.Characters.FirstOrDefault(c => c.Id == planned.Id)
-            ?? project.Characters.FirstOrDefault(c => c.Name.Equals(planned.Name, StringComparison.OrdinalIgnoreCase));
+        var existing = existingCharacters.FirstOrDefault(c => c.Id == planned.Id)
+            ?? existingCharacters.FirstOrDefault(c => c.Name.Equals(planned.Name, StringComparison.OrdinalIgnoreCase));
         if (existing is null)
         {
-            project.Characters.Add(planned);
+            db.Characters.Add(planned);
             continue;
         }
 
+        var referenceImagePath = existing.ReferenceImagePath;
+        var referenceImageUrl = existing.ReferenceImageUrl;
+        var referenceAssetId = existing.ReferenceAssetId;
+        var referenceStatus = existing.ReferenceStatus;
         existing.Name = planned.Name;
         existing.Description = planned.Description;
         existing.Role = planned.Role;
@@ -2106,85 +2272,11 @@ static void ApplyProductionPlanInPlace(Project project, ProductionPlanDto plan, 
         existing.CharacterBibleJson = planned.CharacterBibleJson;
         existing.ReferenceImagePrompt = planned.ReferenceImagePrompt;
         existing.ReferenceImageNegativePrompt = planned.ReferenceImageNegativePrompt;
-        existing.ReferenceStatus = string.IsNullOrWhiteSpace(existing.ReferenceImagePath) ? planned.ReferenceStatus : existing.ReferenceStatus;
+        existing.ReferenceImagePath = referenceImagePath;
+        existing.ReferenceImageUrl = referenceImageUrl;
+        existing.ReferenceAssetId = referenceAssetId;
+        existing.ReferenceStatus = string.IsNullOrWhiteSpace(referenceImagePath) ? planned.ReferenceStatus : referenceStatus;
     }
-
-    var plannedScenes = mapper.BuildScenes(project.Id, plan);
-    foreach (var plannedScene in plannedScenes.OrderBy(s => s.Index))
-    {
-        var existingScene = project.Scenes.FirstOrDefault(s => s.Id == plannedScene.Id)
-            ?? project.Scenes.FirstOrDefault(s => s.Index == plannedScene.Index);
-        if (existingScene is null)
-        {
-            project.Scenes.Add(plannedScene);
-            continue;
-        }
-
-        CopySceneFields(existingScene, plannedScene);
-        foreach (var plannedShot in plannedScene.Shots.OrderBy(s => s.Index))
-        {
-            var existingShot = existingScene.Shots.FirstOrDefault(s => s.Id == plannedShot.Id)
-                ?? existingScene.Shots.FirstOrDefault(s => s.Index == plannedShot.Index);
-            if (existingShot is null)
-            {
-                existingScene.Shots.Add(plannedShot);
-                continue;
-            }
-
-            CopyShotFields(existingShot, plannedShot);
-        }
-    }
-}
-
-static void CopySceneFields(Scene existing, Scene planned)
-{
-    existing.Order = planned.Order;
-    existing.Index = planned.Index;
-    existing.Title = planned.Title;
-    existing.Description = planned.Description;
-    existing.Summary = planned.Summary;
-    existing.Location = planned.Location;
-    existing.TimeOfDay = planned.TimeOfDay;
-    existing.Mood = planned.Mood;
-    existing.EstimatedDurationSeconds = planned.EstimatedDurationSeconds;
-    existing.Purpose = planned.Purpose;
-    existing.StoryStateBefore = planned.StoryStateBefore;
-    existing.StoryStateAfter = planned.StoryStateAfter;
-    existing.LocationId = planned.LocationId;
-    existing.SceneAnchorPrompt = planned.SceneAnchorPrompt;
-    existing.LocationContinuityPrompt = planned.LocationContinuityPrompt;
-    existing.ForbiddenLocationDrift = planned.ForbiddenLocationDrift;
-    existing.RequiredCharactersJson = planned.RequiredCharactersJson;
-    existing.DialogueLinesJson = planned.DialogueLinesJson;
-}
-
-static void CopyShotFields(Shot existing, Shot planned)
-{
-    existing.Order = planned.Order;
-    existing.Index = planned.Index;
-    existing.DurationSeconds = planned.DurationSeconds;
-    existing.ShotType = planned.ShotType;
-    existing.CameraMotion = planned.CameraMotion;
-    existing.Action = planned.Action;
-    existing.Prompt = planned.Prompt;
-    existing.NegativePrompt = planned.NegativePrompt;
-    existing.AudioCue = planned.AudioCue;
-    existing.ContinuityNotes = planned.ContinuityNotes;
-    existing.InvolvedCharacterIdsJson = planned.InvolvedCharacterIdsJson;
-    existing.CharacterLockPrompt = planned.CharacterLockPrompt;
-    existing.LocationId = planned.LocationId;
-    existing.LocationLockPrompt = planned.LocationLockPrompt;
-    existing.ForbiddenDriftTerms = planned.ForbiddenDriftTerms;
-    existing.PreviousShotVisualState = planned.PreviousShotVisualState;
-    existing.CurrentShotVisualState = planned.CurrentShotVisualState;
-    existing.NextShotSetup = planned.NextShotSetup;
-    existing.KeyframeContinuityPrompt = planned.KeyframeContinuityPrompt;
-    existing.SceneAnchorPrompt = planned.SceneAnchorPrompt;
-    existing.RecommendedRenderDurationMode = planned.RecommendedRenderDurationMode;
-    existing.AssemblyExtensionAllowed = planned.AssemblyExtensionAllowed;
-    existing.StartImagePrompt = planned.StartImagePrompt;
-    existing.StartImageNegativePrompt = planned.StartImageNegativePrompt;
-    existing.StartImageStatus = string.IsNullOrWhiteSpace(existing.StartImagePath) ? planned.StartImageStatus : existing.StartImageStatus;
 }
 
 static ProjectSummaryDto ToSummary(Project project) => new(project.Id, project.Name, project.StoryText, project.TargetDurationSeconds, project.Status, project.CreatedAt, project.UpdatedAt);
@@ -2247,6 +2339,40 @@ static object? GetProjectDurationPlanIssue(Project project)
     var sceneCount = project.Scenes.Count;
     var shotCount = project.Scenes.Sum(scene => scene.Shots.Count);
     var plannedDurationSeconds = project.Scenes.Sum(scene => scene.Shots.Sum(shot => Math.Max(0, shot.DurationSeconds)));
+    var rules = GetProjectDurationRules(targetDurationSeconds);
+    var minimumPlannedDurationSeconds = (int)Math.Ceiling(targetDurationSeconds * rules.minimumCoverageRatio);
+    var coveragePercent = targetDurationSeconds > 0
+        ? (int)Math.Round((double)plannedDurationSeconds / targetDurationSeconds * 100)
+        : 0;
+    var isValid = sceneCount >= rules.minimumScenes
+        && shotCount >= rules.minimumShots
+        && plannedDurationSeconds >= minimumPlannedDurationSeconds;
+    if (isValid)
+    {
+        return null;
+    }
+
+    return new
+    {
+        targetDurationSeconds,
+        plannedDurationSeconds,
+        coveragePercent,
+        sceneCount,
+        shotCount,
+        minimumScenes = rules.minimumScenes,
+        minimumShots = rules.minimumShots,
+        targetSceneRange = $"{rules.targetSceneMin}-{rules.targetSceneMax}",
+        targetShotRange = $"{rules.targetShotMin}-{rules.targetShotMax}",
+        minimumPlannedDurationSeconds
+    };
+}
+
+static object? GetProductionPlanDurationIssue(ProductionPlanDto plan)
+{
+    var targetDurationSeconds = plan.TargetDurationSeconds > 0 ? plan.TargetDurationSeconds : 60;
+    var sceneCount = plan.SceneCount;
+    var shotCount = plan.ShotCount;
+    var plannedDurationSeconds = plan.TotalPlannedDurationSeconds;
     var rules = GetProjectDurationRules(targetDurationSeconds);
     var minimumPlannedDurationSeconds = (int)Math.Ceiling(targetDurationSeconds * rules.minimumCoverageRatio);
     var coveragePercent = targetDurationSeconds > 0
