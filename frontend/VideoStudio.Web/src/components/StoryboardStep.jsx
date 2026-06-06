@@ -76,6 +76,13 @@ function getShotStartUrl(shot) {
   return shot?.startImageUrl ? toAbsoluteApiUrl(shot.startImageUrl) : "";
 }
 
+function formatDateTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+}
+
 function getJobTime(job) {
   return new Date(job?.finishedAt || job?.createdAt || 0).getTime();
 }
@@ -314,9 +321,15 @@ function ShotPreview({ shot, jobs, onUploadStartImage }) {
       <div className="storyboard-history">
         <h3>Generation History</h3>
         {latestKeyframeJob ? (
-          <p>
-            Keyframe: <span className={`badge badge-${String(statusLabel(latestKeyframeJob.status)).toLowerCase()}`}>{statusLabel(latestKeyframeJob.status)}</span>
-          </p>
+          <div>
+            <p>
+              Keyframe: <span className={`badge badge-${String(statusLabel(latestKeyframeJob.status)).toLowerCase()}`}>{statusLabel(latestKeyframeJob.status)}</span>
+            </p>
+            <p className="muted">
+              Job {latestKeyframeJob.jobId || latestKeyframeJob.id || "unknown"}
+              {formatDateTime(latestKeyframeJob.finishedAt || latestKeyframeJob.createdAt) ? ` at ${formatDateTime(latestKeyframeJob.finishedAt || latestKeyframeJob.createdAt)}` : ""}
+            </p>
+          </div>
         ) : (
           <p className="muted">No keyframe generation job yet.</p>
         )}
@@ -392,7 +405,7 @@ function ShotInspector({
   const selectedProfileMissing = requiresKeyframe && completedRender && completedRenderMode !== renderDurationMode;
   const selectedProfileBlocked = requiresKeyframe && !hasKeyframe;
   const animateMissingBlocked = requiresKeyframe && missingKeyframeCount > 0;
-  const promptHasGenericText = containsGenericPromptText(draft.startImagePrompt) || containsGenericPromptText(draft.startImageNegativePrompt);
+  const promptHasGenericText = containsGenericPromptText(draft.startImagePrompt);
   const promptWordCount = wordCount(draft.startImagePrompt);
   const promptOverBudget = promptWordCount > 100;
   const canonicalCharacterLock = shot.characterLockPrompt || extractPromptField(draft.startImagePrompt, "Visible characters") || (characters.length ? characters.join(", ") : "No visible character lock.");

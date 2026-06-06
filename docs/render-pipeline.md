@@ -146,18 +146,28 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
 
    Saving a Cast reference prompt can still synchronize the character visual prompt and continuity rules, but storyboard prompt repair treats portrait prompt text as a fallback source that must be sanitized. This prevents old details, such as removed clothing or props, from leaking back into keyframe prompts.
 
-   Storyboard keyframe prompts are compiled from a concise visual-only structure:
+   Storyboard keyframe prompts are compiled from a concise visual-only structure. The actual SDXL prompt sent to image generation must include the visible character locks; showing them in the UI is not enough if they are not injected into the prompt text.
 
    * style lock
    * concise English concrete location lock
-   * visible characters with canonical locks and forbidden drift
+   * compact visible character locks with signature props
    * one explicit primary action
    * camera/framing
    * one coherent lighting setup
    * mood
    * no text/subtitles/logos
 
-   Extended continuity notes remain saved as metadata, but they are not dumped wholesale into the SDXL keyframe prompt. The compiler applies a short prompt budget of roughly 75-100 English words so SDXL receives the image instructions, not the entire continuity bible.
+   The SDXL prompt budget reserves words for visible characters before action/camera/lighting are considered. Priority order is:
+
+   1. short style phrase
+   2. concrete location
+   3. compact visible character locks and signature props
+   4. one primary action
+   5. camera/framing
+   6. lighting
+   7. no text/logos
+
+   If budget is tight, style and location are shortened before character locks are dropped. Extended continuity notes remain saved as metadata, but they are not dumped wholesale into the SDXL keyframe prompt. The compiler applies a short prompt budget of roughly 75-100 English words so SDXL receives the image instructions, not the entire continuity bible.
 
    Generic placeholders such as `cinematic story location`, `A clear narrative beat`, `motivated time of day`, `cinematic mood`, and empty `Characters: .` text are invalid. Full story prose and Turkish narrative text are not valid location locks. If the Location Bible is too generic or polluted with prose, the compiler repairs it into concise English visual geography. Mystery/well stories are repaired toward concrete geography such as an abandoned Seljuq mountain village, old stone well, narrow dirt path, old stone houses, dry grass, worn doors, lantern light, and stable well/village geometry.
 
@@ -171,30 +181,36 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
 
    This keeps scenes, shots, references, uploaded/generated images, completed renders, and media files. It only rewrites compiled keyframe prompts, negative prompts, and continuity-lock fields from the current Character Bible, Location Bible, and user-edited Cast prompts.
 
+   Regenerating a keyframe uses the latest repaired `StartImagePrompt` stored on the shot. Completed keyframe jobs update the shot image URL with a cache-busting query string so the browser refreshes the generated image instead of continuing to show an older `start.png`.
+
    Prompt repair/validation logs include:
 
    * `prompt_compiler_character_lock_validation_started`
    * `prompt_compiler_reference_prompt_sanitized`
    * `prompt_compiler_character_video_lock_created`
    * `prompt_compiler_location_video_lock_created`
+   * `prompt_compiler_sdxl_character_clause_injected`
+   * `prompt_compiler_sdxl_budget_reserved_for_characters`
    * `prompt_compiler_turkish_visual_prompt_repaired`
    * `prompt_compiler_sdxl_prompt_budget_applied`
+   * `prompt_compiler_sdxl_prompt_validation_failed`
+   * `prompt_compiler_sdxl_prompt_validation_completed`
    * `prompt_compiler_story_text_removed_from_location_lock`
    * `prompt_compiler_character_lock_validation_failed`
    * `prompt_compiler_location_lock_validation_failed`
    * `prompt_compiler_lighting_normalization_applied`
    * `prompt_compiler_placeholder_repair_started`
    * `prompt_compiler_placeholder_repair_completed`
-   * `prompt_compiler_keyframe_prompt_validation_completed`
 
    Generic placeholders cause continuity failures before Wan2.2 starts rendering because SDXL keyframes and Wan image-to-video renders inherit those weak locks. Repairing prompts first improves identity, location, and lighting consistency without running any media job.
 
-8. Negative prompts are composed per shot instead of copied as identical boilerplate. The deterministic negative prompt builder combines:
+8. Negative prompts are composed per shot instead of copied as identical boilerplate. The deterministic negative prompt builder keeps a concise priority-ordered list:
 
-   * global technical negatives
-   * character continuity negatives when characters are present
-   * location/era/weather negatives
-   * shot-context negatives for battle, palace, night mountain, village, forest, and fallback continuity cases
+   * non-photoreal styles: cartoon, anime, CGI, illustration, digital painting
+   * modern wrong-era objects: cars, asphalt, electric wires, neon signs
+   * location continuity failures: wrong location, inconsistent well, inconsistent village
+   * character continuity failures: different face, different costume, missing signature props
+   * technical failures: text, logo, watermark, bad hands, extra fingers, blurry, deformed face
 
    Negative prompt validation logs:
 

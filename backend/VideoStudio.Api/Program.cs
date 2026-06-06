@@ -1143,6 +1143,16 @@ app.MapPost("/api/projects/{id:guid}/visuals/generate-shot-start-images", async 
             }
 
             var outputPath = Path.GetFullPath(Path.Combine(storageRoot, "assets", id.ToString(), "shots", shot.Id.ToString(), "start.png"));
+            logger.LogInformation(
+                "keyframe_regenerate_uses_repaired_prompt projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} promptWordCount={PromptWordCount} includedCharacterIds={IncludedCharacterIds} missingCharacterIds={MissingCharacterIds} finalPromptPreview={FinalPromptPreview}",
+                id,
+                scene.Index,
+                shot.Index,
+                shot.Id,
+                WordCount(shot.StartImagePrompt ?? compiled.Prompt),
+                string.Join("|", ResolveShotCharacters(scene, shot, project.Characters).Where(c => PromptContainsCharacterLock(shot.StartImagePrompt ?? compiled.Prompt, c)).Select(c => c.Id)),
+                string.Join("|", ResolveShotCharacters(scene, shot, project.Characters).Where(c => !PromptContainsCharacterLock(shot.StartImagePrompt ?? compiled.Prompt, c)).Select(c => c.Id)),
+                PreviewForLog(shot.StartImagePrompt ?? compiled.Prompt));
             jobs.Add(new RenderJob
             {
                 ProjectId = id,
@@ -1837,7 +1847,7 @@ app.MapPost("/api/worker/jobs/{id:guid}/start", async (Guid id, VideoStudioDbCon
     return Results.Ok(ToRenderJobDto(job));
 });
 
-app.MapPost("/api/worker/jobs/{id:guid}/complete", async (Guid id, CompleteRenderJobRequest request, VideoStudioDbContext db) =>
+app.MapPost("/api/worker/jobs/{id:guid}/complete", async (Guid id, CompleteRenderJobRequest request, VideoStudioDbContext db, ILogger<Program> logger) =>
 {
     var job = await db.RenderJobs.FindAsync(id);
     if (job is null)
@@ -1887,13 +1897,20 @@ app.MapPost("/api/worker/jobs/{id:guid}/complete", async (Guid id, CompleteRende
         var shot = await db.Shots.FindAsync(generatedShotId);
         if (shot is not null)
         {
-            var mediaUrl = TryBuildMediaUrl(request.OutputPath, "assets", job.ProjectId);
+            var baseMediaUrl = TryBuildMediaUrl(request.OutputPath, "assets", job.ProjectId);
+            var mediaUrl = AddMediaCacheBuster(baseMediaUrl, job.Id);
             shot.StartImagePath = request.OutputPath;
             shot.StartImageUrl = mediaUrl;
             shot.StartImageStatus = "Generated";
             var asset = CreateGeneratedAsset(job.ProjectId, null, generatedShotId, AssetType.InputImage, request.OutputPath, mediaUrl);
             db.Assets.Add(asset);
             shot.StartImageAsset = asset;
+            logger.LogInformation(
+                "keyframe_image_cache_busted projectId={ProjectId} shotId={ShotId} jobId={JobId} mediaUrl={MediaUrl}",
+                job.ProjectId,
+                generatedShotId,
+                job.Id,
+                mediaUrl);
         }
     }
     if (job.JobType == RenderJobType.MuxAudio && !string.IsNullOrWhiteSpace(request.OutputPath))
@@ -2655,18 +2672,22 @@ static KeyframePromptResult BuildShotStartImagePrompt(Project project, Scene sce
     var camera = CleanPromptPart($"{RequiredText(shot.ShotType, "medium cinematic shot")}, {RequiredText(shot.CameraMotion, "slow controlled camera movement")}");
     var mood = CleanPromptPart(RequiredText(scene.Mood, "tense grounded mystery"));
 
-    var rawPrompt = string.Join(" ", new[]
+    var compactCharacterClause = BuildCompactVisibleCharacterClause(canonicalCharacters);
+    if (canonicalCharacters.Count > 0)
     {
-        $"Style lock: {style}.",
-        $"Location: {locationLock}.",
-        $"Visible characters: {characterLock}.",
-        $"Primary action: {action}.",
-        $"Camera: {camera}.",
-        $"Lighting: {lighting}.",
-        $"Mood: {mood}.",
-        "No text, no subtitles, no logos."
-    }).Trim();
-    var prompt = ApplySdxlPromptBudget(rawPrompt, project, scene, shot, logger, repairedFields);
+        logger.LogInformation(
+            "prompt_compiler_sdxl_character_clause_injected projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} promptWordCount={PromptWordCount} includedCharacterIds={IncludedCharacterIds} missingCharacterIds={MissingCharacterIds} finalPromptPreview={FinalPromptPreview}",
+            project.Id,
+            scene.Index,
+            shot.Index,
+            shot.Id,
+            WordCount(compactCharacterClause),
+            string.Join("|", canonicalCharacters.Select(c => c.Id)),
+            string.Empty,
+            PreviewForLog(compactCharacterClause));
+    }
+
+    var prompt = ApplySdxlPromptBudget(style, locationLock, compactCharacterClause, action, camera, lighting, mood, canonicalCharacters, project, scene, shot, logger, repairedFields);
 
     var negative = BuildKeyframeNegativePrompt(project, scene, shot, canonicalCharacters);
     var validationFailures = ValidateKeyframePrompt(prompt, negative, canonicalCharacters);
@@ -2674,20 +2695,28 @@ static KeyframePromptResult BuildShotStartImagePrompt(Project project, Scene sce
     {
         failedFields.AddRange(validationFailures);
         logger.LogWarning(
-            "prompt_compiler_character_lock_validation_failed projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} failedFields={FailedFields}",
+            "prompt_compiler_sdxl_prompt_validation_failed projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} promptWordCount={PromptWordCount} includedCharacterIds={IncludedCharacterIds} missingCharacterIds={MissingCharacterIds} finalPromptPreview={FinalPromptPreview} failedFields={FailedFields}",
             project.Id,
             scene.Index,
             shot.Index,
             shot.Id,
+            WordCount(prompt),
+            string.Join("|", canonicalCharacters.Where(c => PromptContainsCharacterLock(prompt, c)).Select(c => c.Id)),
+            string.Join("|", canonicalCharacters.Where(c => !PromptContainsCharacterLock(prompt, c)).Select(c => c.Id)),
+            PreviewForLog(prompt),
             string.Join("|", validationFailures.Distinct(StringComparer.OrdinalIgnoreCase)));
     }
 
     logger.LogInformation(
-        "prompt_compiler_keyframe_prompt_validation_completed projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} failedFields={FailedFields} repairedFields={RepairedFields}",
+        "prompt_compiler_sdxl_prompt_validation_completed projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} promptWordCount={PromptWordCount} includedCharacterIds={IncludedCharacterIds} missingCharacterIds={MissingCharacterIds} finalPromptPreview={FinalPromptPreview} failedFields={FailedFields} repairedFields={RepairedFields}",
         project.Id,
         scene.Index,
         shot.Index,
         shot.Id,
+        WordCount(prompt),
+        string.Join("|", canonicalCharacters.Where(c => PromptContainsCharacterLock(prompt, c)).Select(c => c.Id)),
+        string.Join("|", canonicalCharacters.Where(c => !PromptContainsCharacterLock(prompt, c)).Select(c => c.Id)),
+        PreviewForLog(prompt),
         string.Join("|", failedFields.Distinct(StringComparer.OrdinalIgnoreCase)),
         string.Join("|", repairedFields.Distinct(StringComparer.OrdinalIgnoreCase)));
 
@@ -2774,7 +2803,7 @@ static string BuildKnownStoryCharacterLock(Character character, string candidate
 
     if (character.Name.Contains("Selim", StringComparison.OrdinalIgnoreCase))
     {
-        return CleanPromptPart("Selim Usta, elderly Anatolian stone mason, weathered face, grey beard, dark wool vest over simple shirt, walking staff, calm protective posture, traditional village clothing");
+        return CleanPromptPart("Selim Usta, elderly mountain guide, weathered face, grey beard, faded wool robe, old cloth headwrap, wooden walking staff, calm protective posture");
     }
 
     return CleanPromptPart(RequiredText(text, $"{character.Name}, {character.Role}, stable face, age, hair, costume, silhouette, and signature props"));
@@ -2971,32 +3000,96 @@ static string BuildConcreteLocationLock(Project project, Scene scene, Shot shot,
     return repairedLocation;
 }
 
-static string ApplySdxlPromptBudget(string prompt, Project project, Scene scene, Shot shot, ILogger logger, List<string> repairedFields)
+static string ApplySdxlPromptBudget(
+    string style,
+    string locationLock,
+    string compactCharacterClause,
+    string action,
+    string camera,
+    string lighting,
+    string mood,
+    IReadOnlyCollection<Character> characters,
+    Project project,
+    Scene scene,
+    Shot shot,
+    ILogger logger,
+    List<string> repairedFields)
 {
-    var original = CleanPromptPart(RemoveStoryTextFromVisualPrompt(prompt));
-    var promptParts = Regex.Split(original, "(?=Style lock:|Location:|Visible characters:|Primary action:|Camera:|Lighting:|Mood:|No text)", RegexOptions.IgnoreCase)
-        .Select(CleanPromptPart)
-        .Where(value => !string.IsNullOrWhiteSpace(value))
-        .ToList();
-
-    var finalParts = new List<string>();
-    var wordBudget = 96;
-    foreach (var part in promptParts)
+    var shortStyle = LimitWords(RemoveStoryTextFromVisualPrompt(style), 8);
+    if (string.IsNullOrWhiteSpace(shortStyle))
     {
-        var candidate = string.Join(" ", finalParts.Append(part));
-        if (WordCount(candidate) <= wordBudget || finalParts.Count == 0)
+        shortStyle = "photorealistic live-action cinematic frame";
+    }
+
+    var location = LimitWords(RemoveStoryTextFromVisualPrompt(locationLock), 28);
+    var characterClause = LimitWords(RemoveStoryTextFromVisualPrompt(compactCharacterClause), characters.Count > 1 ? 38 : 22);
+    var primaryAction = LimitWords(RemoveStoryTextFromVisualPrompt(action), 16);
+    var cameraClause = LimitWords(RemoveStoryTextFromVisualPrompt(camera), 10);
+    var lightingClause = LimitWords(RemoveStoryTextFromVisualPrompt(lighting), 12);
+    var moodClause = LimitWords(RemoveStoryTextFromVisualPrompt(mood), 8);
+
+    logger.LogInformation(
+        "prompt_compiler_sdxl_budget_reserved_for_characters projectId={ProjectId} sceneIndex={SceneIndex} shotIndex={ShotIndex} shotId={ShotId} promptWordCount={PromptWordCount} includedCharacterIds={IncludedCharacterIds} missingCharacterIds={MissingCharacterIds} finalPromptPreview={FinalPromptPreview}",
+        project.Id,
+        scene.Index,
+        shot.Index,
+        shot.Id,
+        WordCount(characterClause),
+        string.Join("|", characters.Select(c => c.Id)),
+        string.Empty,
+        PreviewForLog(characterClause));
+
+    var finalPrompt = string.Join(" ", new[]
+    {
+        $"Style: {shortStyle}.",
+        $"Location: {location}.",
+        string.IsNullOrWhiteSpace(characterClause) ? string.Empty : $"Visible characters: {characterClause}.",
+        $"Primary action: {primaryAction}.",
+        $"Camera: {cameraClause}.",
+        $"Lighting: {lightingClause}.",
+        $"Mood: {moodClause}.",
+        "No text, no subtitles, no logos."
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    var originalPrompt = string.Join(" ", new[]
+    {
+        style,
+        locationLock,
+        compactCharacterClause,
+        action,
+        camera,
+        lighting,
+        mood
+    });
+
+    if (WordCount(finalPrompt) > 100)
+    {
+        finalPrompt = string.Join(" ", new[]
         {
-            finalParts.Add(part);
-        }
+            $"Style: {shortStyle}.",
+            $"Location: {LimitWords(location, 22)}.",
+            string.IsNullOrWhiteSpace(characterClause) ? string.Empty : $"Visible characters: {characterClause}.",
+            $"Primary action: {LimitWords(primaryAction, 12)}.",
+            $"Camera: {LimitWords(cameraClause, 8)}.",
+            $"Lighting: {LimitWords(lightingClause, 8)}.",
+            "No text, no subtitles, no logos."
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
     }
 
-    var finalPrompt = string.Join(" ", finalParts);
-    if (!finalPrompt.Contains("No text", StringComparison.OrdinalIgnoreCase))
+    if (WordCount(finalPrompt) > 110 && !string.IsNullOrWhiteSpace(characterClause))
     {
-        finalPrompt = $"{finalPrompt} No text, no subtitles, no logos.";
+        finalPrompt = string.Join(" ", new[]
+        {
+            $"Style: {LimitWords(shortStyle, 5)}.",
+            $"Location: {LimitWords(location, 18)}.",
+            $"Visible characters: {characterClause}.",
+            $"Primary action: {LimitWords(primaryAction, 10)}.",
+            $"Lighting: {LimitWords(lightingClause, 7)}.",
+            "No text, no subtitles, no logos."
+        });
     }
 
-    if (!string.Equals(original, finalPrompt, StringComparison.Ordinal) || WordCount(prompt) > 100)
+    if (!string.Equals(CleanPromptPart(originalPrompt), CleanPromptPart(finalPrompt), StringComparison.Ordinal) || WordCount(finalPrompt) > 100)
     {
         repairedFields.Add("sdxlPromptBudget");
         logger.LogInformation(
@@ -3005,14 +3098,33 @@ static string ApplySdxlPromptBudget(string prompt, Project project, Scene scene,
             scene.Index,
             shot.Index,
             shot.Id,
-            prompt.Length,
+            originalPrompt.Length,
             finalPrompt.Length,
-            WordCount(prompt),
+            WordCount(originalPrompt),
             WordCount(finalPrompt),
             "sdxlPromptBudget");
     }
 
-    return finalPrompt;
+    return CleanPromptPart(finalPrompt);
+}
+
+static string BuildCompactVisibleCharacterClause(IReadOnlyCollection<Character> characters)
+{
+    if (characters.Count == 0)
+    {
+        return string.Empty;
+    }
+
+    return string.Join(" ", characters.Select(character =>
+    {
+        var lockText = CanonicalCharacterLock(character);
+        var clause = character.Name.Contains("Aras", StringComparison.OrdinalIgnoreCase)
+            ? "Aras, young Anatolian messenger with dark hair, earth-toned wool tunic, worn leather belt, small messenger pouch, holding brass lantern"
+            : character.Name.Contains("Selim", StringComparison.OrdinalIgnoreCase)
+                ? "Selim, elderly mountain guide with grey beard, faded wool robe, old cloth headwrap, holding wooden walking staff"
+                : $"{character.Name}, {lockText}";
+        return $"{LimitWords(SanitizePortraitPrompt(clause), 20)}.";
+    }));
 }
 
 static string RemoveStoryTextFromVisualPrompt(string value)
@@ -3150,31 +3262,28 @@ static string BuildKeyframeNegativePrompt(Project project, Scene scene, Shot sho
 {
     var parts = new List<string>
     {
-        "wrong location",
-        "different face",
-        "different costume",
-        "modern objects",
-        "modern clothing",
-        "cars",
-        "asphalt",
-        "electric wires",
-        "neon signs",
-        "unrelated characters",
-        "inconsistent well",
-        "inconsistent village",
         "cartoon",
         "anime",
         "CGI",
         "illustration",
         "digital painting",
-        "plastic skin",
-        "bad hands",
-        "extra fingers",
-        "extra limbs",
-        "distorted face",
+        "modern objects",
+        "cars",
+        "asphalt",
+        "electric wires",
+        "neon signs",
+        "wrong location",
+        "inconsistent well",
+        "inconsistent village",
+        "different face",
+        "different costume",
         "text",
         "logo",
-        "watermark"
+        "watermark",
+        "bad hands",
+        "extra fingers",
+        "blurry",
+        "deformed face"
     };
     foreach (var character in characters)
     {
@@ -3193,7 +3302,8 @@ static string BuildKeyframeNegativePrompt(Project project, Scene scene, Shot sho
         .Select(CleanPromptPart)
         .Where(value => !string.IsNullOrWhiteSpace(value))
         .Where(value => !IsAbstractMetadataNegative(value))
-        .Distinct(StringComparer.OrdinalIgnoreCase));
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(32));
 }
 
 static List<string> ValidateKeyframePrompt(string prompt, string negativePrompt, IReadOnlyCollection<Character> characters)
@@ -3225,7 +3335,7 @@ static List<string> ValidateKeyframePrompt(string prompt, string negativePrompt,
     }
     foreach (var character in characters)
     {
-        if (!prompt.Contains(character.Name, StringComparison.OrdinalIgnoreCase) || !prompt.Contains(CanonicalCharacterLock(character).Split(',', '.', ';')[0], StringComparison.OrdinalIgnoreCase))
+        if (!PromptContainsCharacterLock(prompt, character))
         {
             failed.Add($"missingCanonicalLock:{character.Name}");
         }
@@ -3341,6 +3451,77 @@ static int WordCount(string? value)
     }
 
     return Regex.Matches(value, "\\b[\\p{L}\\p{N}'-]+\\b").Count;
+}
+
+static bool PromptContainsCharacterLock(string prompt, Character character)
+{
+    if (string.IsNullOrWhiteSpace(prompt))
+    {
+        return false;
+    }
+
+    if (!prompt.Contains(character.Name, StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    var lockText = CanonicalCharacterLock(character).ToLowerInvariant();
+    var requiredTerms = new List<string>();
+    if (lockText.Contains("dark hair")) requiredTerms.Add("dark hair");
+    if (lockText.Contains("earth-toned")) requiredTerms.Add("earth-toned");
+    if (lockText.Contains("messenger pouch")) requiredTerms.Add("messenger pouch");
+    if (lockText.Contains("brass lantern")) requiredTerms.Add("brass lantern");
+    if (lockText.Contains("grey beard")) requiredTerms.Add("grey beard");
+    if (lockText.Contains("faded wool robe")) requiredTerms.Add("faded wool robe");
+    if (lockText.Contains("headwrap")) requiredTerms.Add("headwrap");
+    if (lockText.Contains("walking staff")) requiredTerms.Add("walking staff");
+
+    if (requiredTerms.Count == 0)
+    {
+        return true;
+    }
+
+    return requiredTerms.Any(term => prompt.Contains(term, StringComparison.OrdinalIgnoreCase));
+}
+
+static string LimitWords(string? value, int maxWords)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    var words = Regex.Matches(CleanPromptPart(value), "\\b[\\p{L}\\p{N}'-]+\\b")
+        .Select(match => match.Value)
+        .ToList();
+    if (words.Count <= maxWords)
+    {
+        return CleanPromptPart(value);
+    }
+
+    return CleanPromptPart(string.Join(" ", words.Take(maxWords)));
+}
+
+static string PreviewForLog(string? value, int maxLength = 220)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    var text = CleanPromptPart(value);
+    return text.Length <= maxLength ? text : $"{text[..maxLength]}...";
+}
+
+static string? AddMediaCacheBuster(string? mediaUrl, Guid version)
+{
+    if (string.IsNullOrWhiteSpace(mediaUrl))
+    {
+        return mediaUrl;
+    }
+
+    var separator = mediaUrl.Contains("?") ? "&" : "?";
+    return $"{mediaUrl}{separator}v={version:N}";
 }
 
 static bool IsPronounOnlyAction(string? action)
