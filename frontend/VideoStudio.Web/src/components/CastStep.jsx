@@ -143,7 +143,7 @@ export default function CastStep({
       <section className="cast-actions-card">
         <div>
           <h3>Character References</h3>
-          <p className="muted">Generate references after visual prompts are prepared, or upload your own image for each character.</p>
+          <p className="muted">The reference prompt is the canonical character lock used by downstream Storyboard keyframe prompts.</p>
         </div>
         <div className="actions">
           <button type="button" disabled={isBusy || !plan} onClick={onPrepareVisuals}>
@@ -185,7 +185,7 @@ export default function CastStep({
       <section className="cast-explainer">
         <div>
           <h3>How references are used</h3>
-          <p>Character references guide identity in prompts, including face, hair, clothing, and continuity details.</p>
+          <p>Saved cast prompts guide identity in Storyboard prompts, including face, hair, age, clothing, props, and forbidden drift.</p>
         </div>
         <div>
           <h3>What they are not</h3>

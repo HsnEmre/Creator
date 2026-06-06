@@ -22,6 +22,7 @@ import {
   renderProject,
   preparePreproduction,
   regenerateDirectorPlan,
+  repairStoryboardPrompts,
   resetStaleJobs,
   saveStory,
   updateCharacterReferencePrompt,
@@ -481,6 +482,14 @@ export default function ProjectDetailPage() {
     });
   }
 
+  function onRepairStoryboardPrompts() {
+    return withAction("repair-storyboard-prompts", async () => {
+      const result = await repairStoryboardPrompts(projectId);
+      await Promise.all([loadPlan(), loadPreproduction(), loadScenesAndShots()]);
+      setMessage(`Repaired ${result?.repairedShots ?? 0} storyboard prompt(s) using current cast and location locks.`);
+    });
+  }
+
   function onSaveCharacterPrompt(characterId, draft) {
     return withAction("save-character-prompt", async () => {
       await updateCharacterReferencePrompt(projectId, characterId, {
@@ -488,7 +497,7 @@ export default function ProjectDetailPage() {
         referenceImageNegativePrompt: draft.referenceImageNegativePrompt
       });
       await Promise.all([loadPlan(), loadPreproduction()]);
-      setMessage("Character reference prompt saved.");
+      setMessage("Saved as canonical character lock for storyboard prompts.");
     });
   }
 
@@ -807,6 +816,7 @@ export default function ProjectDetailPage() {
             onRegeneratePlan={onAnalyze}
             onRepairDirectorPlan={onRepairDirectorPlan}
             onRegenerateDirectorPlan={onRegenerateDirectorPlan}
+            onRepairStoryboardPrompts={onRepairStoryboardPrompts}
           />
         ) : null}
 

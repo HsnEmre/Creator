@@ -136,6 +136,50 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
    * visual prompts and negative prompts are kept in English
    * generated start image prompts include character locks and location continuity
 
+   The canonical character lock used by storyboard/keyframe prompts is:
+
+   1. the user-edited Cast reference prompt when present
+   2. otherwise `Character.VisualPrompt`
+   3. otherwise a deterministic fallback from character name/role
+
+   Saving a Cast reference prompt also synchronizes the character visual prompt and continuity rules so later storyboard prompt repair uses the corrected cast lock, not stale director text. This prevents old details, such as removed clothing or props, from leaking back into keyframe prompts.
+
+   Storyboard keyframe prompts are compiled from a concise structure:
+
+   * style lock
+   * concrete location lock
+   * visible characters with canonical locks and forbidden drift
+   * one explicit primary action
+   * continuity from the previous shot
+   * camera/framing
+   * one coherent lighting setup
+   * mood
+   * no text/subtitles/logos
+
+   Generic placeholders such as `cinematic story location`, `motivated time of day`, `cinematic mood`, and empty `Characters: .` text are invalid. If the Location Bible is too generic, the compiler repairs it from story, scene, and shot context. Mystery/well stories are repaired toward concrete geography such as an abandoned Seljuq mountain village, old stone well, narrow dirt path, old stone houses, dry grass, worn doors, lantern light, and stable well/village geometry.
+
+   Lighting is normalized to one coherent setup per scene/shot. Contradictory bundles such as daylight plus golden hour plus midday plus moonlight are removed before keyframe prompts are saved.
+
+   Keyframe negative prompts are visual, not metadata-like. They remove abstract terms such as `wrong scene index` and `wrong shot action` and use concrete negatives such as wrong location, different face, different costume, missing lantern/staff/headwrap, modern objects, inconsistent well, inconsistent village, text, logo, and watermark.
+
+   Existing projects can recompile storyboard prompts without deleting media through:
+
+   * `POST /api/projects/{id}/storyboard/prompts/repair`
+
+   This keeps scenes, shots, references, uploaded/generated images, completed renders, and media files. It only rewrites compiled keyframe prompts, negative prompts, and continuity-lock fields from the current Character Bible, Location Bible, and user-edited Cast prompts.
+
+   Prompt repair/validation logs include:
+
+   * `prompt_compiler_character_lock_validation_started`
+   * `prompt_compiler_character_lock_validation_failed`
+   * `prompt_compiler_location_lock_validation_failed`
+   * `prompt_compiler_lighting_normalization_applied`
+   * `prompt_compiler_placeholder_repair_started`
+   * `prompt_compiler_placeholder_repair_completed`
+   * `prompt_compiler_keyframe_prompt_validation_completed`
+
+   Generic placeholders cause continuity failures before Wan2.2 starts rendering because SDXL keyframes and Wan image-to-video renders inherit those weak locks. Repairing prompts first improves identity, location, and lighting consistency without running any media job.
+
 8. Negative prompts are composed per shot instead of copied as identical boilerplate. The deterministic negative prompt builder combines:
 
    * global technical negatives

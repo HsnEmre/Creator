@@ -132,7 +132,7 @@ export default function VisualPreparationPanel({
                   <img className="reference-image" src={toAbsoluteApiUrl(character.referenceImageUrl)} alt={`${character.name} reference`} />
                 ) : null}
                 <label className="full">
-                  Reference image prompt
+                  Canonical character lock / reference prompt
                   <textarea rows={5} value={draft.referenceImagePrompt || ""} onChange={(event) => updateCharacter(character.id, "referenceImagePrompt", event.target.value)} />
                 </label>
                 <label className="full">

@@ -30,6 +30,27 @@ function compactText(value, maxLength = 180) {
   return `${normalized.slice(0, maxLength - 1).trim()}...`;
 }
 
+function containsGenericPromptText(value) {
+  if (!value) return false;
+  const text = String(value).toLowerCase();
+  return [
+    "cinematic story location",
+    "motivated time of day",
+    "cinematic mood",
+    "characters: .",
+    "visible characters: .",
+    "wrong scene index",
+    "wrong shot action"
+  ].some((term) => text.includes(term));
+}
+
+function extractPromptField(prompt, label) {
+  if (!prompt) return "";
+  const pattern = new RegExp(`${label}:\\s*([^.]*)`, "i");
+  const match = String(prompt).match(pattern);
+  return match?.[1]?.trim() || "";
+}
+
 function copyText(value) {
   if (!value || !navigator.clipboard) return;
   navigator.clipboard.writeText(value).catch(() => {});
@@ -320,7 +341,8 @@ function ShotInspector({
   onGenerateShotStartImage,
   onAnimateSelected,
   onAnimateAll,
-  onRegenerateAll
+  onRegenerateAll,
+  onRepairStoryboardPrompts
 }) {
   const [draft, setDraft] = useState({ startImagePrompt: "", startImageNegativePrompt: "" });
 
@@ -357,6 +379,10 @@ function ShotInspector({
   const selectedProfileMissing = requiresKeyframe && completedRender && completedRenderMode !== renderDurationMode;
   const selectedProfileBlocked = requiresKeyframe && !hasKeyframe;
   const animateMissingBlocked = requiresKeyframe && missingKeyframeCount > 0;
+  const promptHasGenericText = containsGenericPromptText(draft.startImagePrompt) || containsGenericPromptText(draft.startImageNegativePrompt);
+  const canonicalCharacterLock = shot.characterLockPrompt || extractPromptField(draft.startImagePrompt, "Visible characters") || (characters.length ? characters.join(", ") : "No visible character lock.");
+  const concreteLocationLock = shot.locationLockPrompt || extractPromptField(draft.startImagePrompt, "Concrete location") || shot.sceneLocation || "No concrete location lock.";
+  const lightingSetup = extractPromptField(draft.startImagePrompt, "Lighting") || "Not available";
 
   return (
     <aside className="storyboard-inspector">
@@ -377,6 +403,22 @@ function ShotInspector({
         ) : (
           <p className="muted">No character list is attached to this shot.</p>
         )}
+      </div>
+
+      <div className="storyboard-inspector-section">
+        <h3>Continuity Locks Used</h3>
+        <p>
+          <b>Character lock:</b> {compactText(canonicalCharacterLock, 260)}
+        </p>
+        <p>
+          <b>Location lock:</b> {compactText(concreteLocationLock, 260)}
+        </p>
+        <p>
+          <b>Lighting:</b> {compactText(lightingSetup, 180)}
+        </p>
+        {promptHasGenericText ? (
+          <p className="msg error compact-msg">This keyframe prompt contains generic placeholder continuity text. Repair prompts before rendering.</p>
+        ) : null}
       </div>
 
       <div className="storyboard-inspector-section">
@@ -473,6 +515,11 @@ function ShotInspector({
               Regenerate All ({renderDurationMode})
             </button>
           ) : null}
+          {onRepairStoryboardPrompts ? (
+            <button type="button" disabled={isBusy} onClick={onRepairStoryboardPrompts}>
+              Repair Storyboard Prompts
+            </button>
+          ) : null}
           <small className="muted">Animate Missing skips shots with completed renders. Regenerate All queues every shot again.</small>
           {isDurationPlanInvalid ? <small className="msg error compact-msg">Repair the director plan before rendering this storyboard.</small> : null}
           {animateMissingBlocked ? <small className="msg error compact-msg">{missingKeyframeCount} shot(s) need keyframes before LongMotion can queue all missing renders.</small> : null}
@@ -544,7 +591,8 @@ export default function StoryboardStep({
   onRegenerateAll,
   onRegeneratePlan,
   onRepairDirectorPlan,
-  onRegenerateDirectorPlan
+  onRegenerateDirectorPlan,
+  onRepairStoryboardPrompts
 }) {
   const shots = useMemo(() => normalizePlanShots(plan), [plan]);
   const selectedShotId = selectedShotIds[0] || shots[0]?.id || null;
@@ -654,6 +702,11 @@ export default function StoryboardStep({
           {onRegeneratePlan ? (
             <button type="button" disabled={isBusy} onClick={onRegeneratePlan}>
               Analyze Again
+            </button>
+          ) : null}
+          {onRepairStoryboardPrompts ? (
+            <button type="button" disabled={isBusy} onClick={onRepairStoryboardPrompts}>
+              Repair Storyboard Prompts
             </button>
           ) : null}
           <button type="button" disabled={isBusy || !plan || isDurationPlanInvalid} onClick={onGenerateShotStartImages}>
@@ -799,6 +852,7 @@ export default function StoryboardStep({
           onAnimateSelected={onAnimateSelected}
           onAnimateAll={onAnimateAll}
           onRegenerateAll={onRegenerateAll}
+          onRepairStoryboardPrompts={onRepairStoryboardPrompts}
         />
       </div>
 

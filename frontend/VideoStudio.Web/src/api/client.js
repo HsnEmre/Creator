@@ -138,6 +138,13 @@ export function preparePreproduction(projectId) {
   });
 }
 
+export function repairStoryboardPrompts(projectId) {
+  return request(`/api/projects/${projectId}/storyboard/prompts/repair`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
 export function getPreproduction(projectId) {
   return request(`/api/projects/${projectId}/preproduction`, { allowNotFound: true });
 }

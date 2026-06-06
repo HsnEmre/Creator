@@ -185,9 +185,9 @@ public sealed class PromptCompiler(ILogger<PromptCompiler> logger)
         }
         if (negatives.Count == 0)
         {
-            negatives.Add($"wrong location for {ValueOr(scene.Location, "the scene")}, mismatched mood, unrelated action, visual discontinuity from scene {scene.Index} shot {shot.Index}");
+            negatives.Add($"wrong location for {ValueOr(scene.Location, "the scene")}, unrelated action, unrelated characters, inconsistent architecture, inconsistent props");
         }
-        negatives.Add($"wrong scene index {scene.Index}, wrong shot action, unrelated characters, inconsistent continuity");
+        negatives.Add("wrong location, different face, different costume, missing signature prop, unrelated characters, inconsistent continuity");
         return string.Join(", ", negatives);
     }
 
