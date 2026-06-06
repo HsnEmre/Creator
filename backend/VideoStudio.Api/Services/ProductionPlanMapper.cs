@@ -34,6 +34,7 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
     {
         return plan.Characters.Select(c => new Character
         {
+            Id = c.Id ?? Guid.NewGuid(),
             ProjectId = projectId,
             Name = c.Name,
             Description = c.Personality,
@@ -45,7 +46,9 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
             CharacterBibleJson = json.Serialize(c.Bible),
             ReferenceImagePrompt = c.ReferenceImagePrompt,
             ReferenceImageNegativePrompt = c.ReferenceImageNegativePrompt,
-            ReferenceStatus = string.IsNullOrWhiteSpace(c.ReferenceImagePrompt) ? "Missing" : "PromptReady"
+            ReferenceStatus = c.ReferenceStatus ?? (string.IsNullOrWhiteSpace(c.ReferenceImagePrompt) ? "Missing" : "PromptReady"),
+            ReferenceImagePath = c.ReferenceImagePath,
+            ReferenceImageUrl = c.ReferenceImageUrl
         }).ToList();
     }
 
@@ -56,6 +59,7 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
         {
             var scene = new Scene
             {
+                Id = scenePlan.Id ?? Guid.NewGuid(),
                 ProjectId = projectId,
                 Order = scenePlan.Index,
                 Index = scenePlan.Index,
@@ -79,6 +83,7 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
 
             scene.Shots.AddRange(scenePlan.Shots.OrderBy(s => s.Index).Select(shot => new Shot
             {
+                Id = shot.Id ?? Guid.NewGuid(),
                 ProjectId = projectId,
                 SceneId = scene.Id,
                 Order = shot.Index,
@@ -107,7 +112,9 @@ public sealed class ProductionPlanMapper(ProductionPlanJsonService json)
                 Status = ShotStatus.Pending,
                 StartImagePrompt = shot.StartImagePrompt,
                 StartImageNegativePrompt = shot.StartImageNegativePrompt,
-                StartImageStatus = string.IsNullOrWhiteSpace(shot.StartImagePrompt) ? "Missing" : "PromptReady"
+                StartImageStatus = shot.StartImageStatus ?? (string.IsNullOrWhiteSpace(shot.StartImagePrompt) ? "Missing" : "PromptReady"),
+                StartImagePath = shot.StartImagePath,
+                StartImageUrl = shot.StartImageUrl
             }));
 
             scenes.Add(scene);

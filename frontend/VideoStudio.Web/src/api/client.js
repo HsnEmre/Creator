@@ -64,6 +64,20 @@ export function analyzeProject(projectId) {
   });
 }
 
+export function repairDirectorPlan(projectId) {
+  return request(`/api/projects/${projectId}/director-plan/repair`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export function regenerateDirectorPlan(projectId) {
+  return request(`/api/projects/${projectId}/director-plan/regenerate`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
 export function getProductionPlan(projectId) {
   return request(`/api/projects/${projectId}/production-plan`, { allowNotFound: true });
 }

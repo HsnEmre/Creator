@@ -18,8 +18,10 @@ import {
   getScenes,
   getShots,
   refinalizeProject,
+  repairDirectorPlan,
   renderProject,
   preparePreproduction,
+  regenerateDirectorPlan,
   resetStaleJobs,
   saveStory,
   updateCharacterReferencePrompt,
@@ -275,6 +277,22 @@ export default function ProjectDetailPage() {
       await analyzeProject(projectId);
       await Promise.all([loadProject(), loadPlan(), loadPreproduction(), loadDialogueLines()]);
       setMessage("Analyze completed.");
+    });
+  }
+
+  function onRepairDirectorPlan() {
+    return withAction("repair-director-plan", async () => {
+      await repairDirectorPlan(projectId);
+      await Promise.all([loadProject(), loadPlan(), loadPreproduction(), loadDialogueLines(), loadScenesAndShots()]);
+      setMessage("Director plan repaired.");
+    });
+  }
+
+  function onRegenerateDirectorPlan() {
+    return withAction("regenerate-director-plan", async () => {
+      await regenerateDirectorPlan(projectId);
+      await Promise.all([loadProject(), loadPlan(), loadPreproduction(), loadDialogueLines(), loadScenesAndShots()]);
+      setMessage("Director plan regenerated.");
     });
   }
 
@@ -633,12 +651,13 @@ export default function ProjectDetailPage() {
     isDurationPlanValid: visualPlan?.isDurationPlanValid ?? true,
     durationPlanWarning: visualPlan?.durationPlanWarning || ""
   };
+  const isDurationPlanInvalid = durationPlanSummary.isDurationPlanValid === false;
   const completedImageToVideoCount = jobs.filter(
     (job) => job.jobTypeName === "RenderVideo" && isCompletedStatus(job.status) && String(job.generationModeName).toLowerCase() === "imagetovideo"
   ).length;
   const continuitySummary = {
-    hasDirectorPlan: visualPlan?.hasDirectorPlan ?? false,
-    storyStructureValid: visualPlan?.storyStructureValid ?? false,
+    hasDirectorPlan: (visualPlan?.hasDirectorPlan ?? false) && !isDurationPlanInvalid,
+    storyStructureValid: (visualPlan?.storyStructureValid ?? false) && !isDurationPlanInvalid,
     locationContinuityValid: visualPlan?.locationContinuityValid ?? false,
     keyframeContinuityValid: visualPlan?.keyframeContinuityValid ?? false,
     renderStrategyName: visualPlan?.renderStrategyName || visualPlan?.renderStrategy?.name || "",
@@ -786,6 +805,8 @@ export default function ProjectDetailPage() {
             onAnimateAll={onRenderStoryboardAll}
             onRegenerateAll={onRegenerateStoryboardAll}
             onRegeneratePlan={onAnalyze}
+            onRepairDirectorPlan={onRepairDirectorPlan}
+            onRegenerateDirectorPlan={onRegenerateDirectorPlan}
           />
         ) : null}
 

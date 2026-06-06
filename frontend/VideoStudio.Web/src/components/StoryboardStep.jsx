@@ -310,6 +310,7 @@ function ShotInspector({
   hasAnyShotStartImage,
   durationPlanSummary,
   missingKeyframeCount,
+  isDurationPlanInvalid,
   isBusy,
   hasRunningRenderVideo,
   onUseShotStartImageChange,
@@ -458,21 +459,22 @@ function ShotInspector({
       <div className="storyboard-inspector-section">
         <h3>Actions</h3>
         <div className="actions column">
-          <button type="button" disabled={isBusy} onClick={() => onGenerateShotStartImage(shot.id)}>
+          <button type="button" disabled={isBusy || isDurationPlanInvalid} onClick={() => onGenerateShotStartImage(shot.id)}>
             Regenerate Keyframe
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo || selectedProfileBlocked} onClick={() => onAnimateSelected(shot)}>
+          <button type="button" disabled={isBusy || isDurationPlanInvalid || hasRunningRenderVideo || selectedProfileBlocked} onClick={() => onAnimateSelected(shot)}>
             Animate Selected ({renderDurationMode})
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo || animateMissingBlocked} onClick={onAnimateAll}>
+          <button type="button" disabled={isBusy || isDurationPlanInvalid || hasRunningRenderVideo || animateMissingBlocked} onClick={onAnimateAll}>
             Animate Missing ({renderDurationMode})
           </button>
           {onRegenerateAll ? (
-            <button type="button" disabled={isBusy || hasRunningRenderVideo || animateMissingBlocked} onClick={onRegenerateAll}>
+            <button type="button" disabled={isBusy || isDurationPlanInvalid || hasRunningRenderVideo || animateMissingBlocked} onClick={onRegenerateAll}>
               Regenerate All ({renderDurationMode})
             </button>
           ) : null}
           <small className="muted">Animate Missing skips shots with completed renders. Regenerate All queues every shot again.</small>
+          {isDurationPlanInvalid ? <small className="msg error compact-msg">Repair the director plan before rendering this storyboard.</small> : null}
           {animateMissingBlocked ? <small className="msg error compact-msg">{missingKeyframeCount} shot(s) need keyframes before LongMotion can queue all missing renders.</small> : null}
         </div>
       </div>
@@ -540,7 +542,9 @@ export default function StoryboardStep({
   onAnimateSelected,
   onAnimateAll,
   onRegenerateAll,
-  onRegeneratePlan
+  onRegeneratePlan,
+  onRepairDirectorPlan,
+  onRegenerateDirectorPlan
 }) {
   const shots = useMemo(() => normalizePlanShots(plan), [plan]);
   const selectedShotId = selectedShotIds[0] || shots[0]?.id || null;
@@ -575,6 +579,7 @@ export default function StoryboardStep({
   const recommendLongMotion = targetDurationSeconds >= 60 && renderDurationMode !== "LongMotion";
   const blockStrictBulkRender = requiresKeyframe && missingKeyframeCount > 0;
   const blockStrictSelectedRender = requiresKeyframe && selectedShot && !selectedHasKeyframe;
+  const isDurationPlanInvalid = summary.isDurationPlanValid === false;
 
   if (!plan) {
     return (
@@ -636,14 +641,29 @@ export default function StoryboardStep({
           ) : null}
         </div>
         <div className="storyboard-head-actions">
-          <button type="button" disabled={isBusy || !plan} onClick={onGenerateShotStartImages}>
+          {onRepairDirectorPlan ? (
+            <button type="button" disabled={isBusy || !isDurationPlanInvalid} onClick={onRepairDirectorPlan}>
+              Repair Duration Plan
+            </button>
+          ) : null}
+          {onRegenerateDirectorPlan ? (
+            <button type="button" disabled={isBusy} onClick={onRegenerateDirectorPlan}>
+              Regenerate Director Plan
+            </button>
+          ) : null}
+          {onRegeneratePlan ? (
+            <button type="button" disabled={isBusy} onClick={onRegeneratePlan}>
+              Analyze Again
+            </button>
+          ) : null}
+          <button type="button" disabled={isBusy || !plan || isDurationPlanInvalid} onClick={onGenerateShotStartImages}>
             Generate Keyframes
           </button>
-          <button type="button" disabled={isBusy || hasRunningRenderVideo || blockStrictBulkRender} onClick={onAnimateAll}>
+          <button type="button" disabled={isBusy || isDurationPlanInvalid || hasRunningRenderVideo || blockStrictBulkRender} onClick={onAnimateAll}>
             Animate Missing ({renderDurationMode})
           </button>
           {onRegenerateAll ? (
-            <button type="button" disabled={isBusy || hasRunningRenderVideo || blockStrictBulkRender} onClick={onRegenerateAll}>
+            <button type="button" disabled={isBusy || isDurationPlanInvalid || hasRunningRenderVideo || blockStrictBulkRender} onClick={onRegenerateAll}>
               Regenerate All ({renderDurationMode})
             </button>
           ) : null}
@@ -681,10 +701,15 @@ export default function StoryboardStep({
 
       {summary.isDurationPlanValid === false || summary.durationPlanWarning ? (
         <div className="msg error compact-msg storyboard-warning-action">
-          <span>{summary.durationPlanWarning || "Storyboard is too short for the target duration. Regenerate plan."}</span>
-          {onRegeneratePlan ? (
-            <button type="button" disabled={isBusy} onClick={onRegeneratePlan}>
-              Regenerate plan
+          <span>{summary.durationPlanWarning || "Storyboard is too short for the target duration. Regenerate or repair plan before rendering."}</span>
+          {onRepairDirectorPlan ? (
+            <button type="button" disabled={isBusy} onClick={onRepairDirectorPlan}>
+              Repair Duration Plan
+            </button>
+          ) : null}
+          {onRegenerateDirectorPlan ? (
+            <button type="button" disabled={isBusy} onClick={onRegenerateDirectorPlan}>
+              Regenerate Director Plan
             </button>
           ) : null}
         </div>
@@ -763,6 +788,7 @@ export default function StoryboardStep({
           useCharacterReferenceInPrompt={useCharacterReferenceInPrompt}
           hasAnyShotStartImage={hasAnyShotStartImage}
           missingKeyframeCount={missingKeyframeCount}
+          isDurationPlanInvalid={isDurationPlanInvalid}
           isBusy={isBusy}
           hasRunningRenderVideo={hasRunningRenderVideo}
           onUseShotStartImageChange={onUseShotStartImageChange}

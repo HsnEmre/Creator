@@ -620,6 +620,16 @@ app.MapPost("/api/projects/{id:guid}/render", async (Guid id, RenderRequestDto? 
         return Results.BadRequest("Project has no shots to render.");
     }
 
+    var durationIssue = GetProjectDurationPlanIssue(project);
+    if (durationIssue is not null)
+    {
+        return Results.BadRequest(new
+        {
+            error = "Storyboard is too short for the target duration. Regenerate or repair plan before rendering.",
+            durationIssue
+        });
+    }
+
     var settings = GetPresetSettings(preset);
     var hasExplicitTarget = request?.ShotIds?.Count > 0 || request?.SceneIndex is not null || request?.ShotIndex is not null;
     var limitedShots = hasExplicitTarget ? shots : shots.Take(maxShots).ToList();
@@ -1966,7 +1976,216 @@ app.MapPost("/api/projects/{id:guid}/jobs/cancel-active", async (Guid id, VideoS
     });
 });
 
+app.MapPost("/api/projects/{id:guid}/director-plan/repair", RepairDirectorPlanAsync);
+app.MapPost("/api/projects/{id:guid}/director-plan/regenerate", RepairDirectorPlanAsync);
+
 app.Run();
+
+static async Task<IResult> RepairDirectorPlanAsync(Guid id, VideoStudioDbContext db, ProductionPlanMapper mapper, ProductionPlanNormalizer normalizer, ILogger<Program> logger, CancellationToken cancellationToken)
+{
+    var project = await db.Projects
+        .Include(p => p.Characters)
+        .Include(p => p.Scenes).ThenInclude(s => s.Shots)
+        .Include(p => p.RenderJobs)
+        .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+    if (project is null)
+    {
+        return Results.NotFound();
+    }
+
+    if (project.Scenes.Count == 0)
+    {
+        return Results.BadRequest("Analyze the story before repairing the director plan.");
+    }
+
+    var currentPlan = mapper.FromProject(project);
+    var currentRules = GetProjectDurationRules(currentPlan.TargetDurationSeconds);
+    var repairedPlan = normalizer.RepairDirectorDurationPlan(currentPlan, id);
+    logger.LogInformation(
+        "director_plan_regenerate_requested projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} plannedDurationSeconds={PlannedDurationSeconds} coveragePercent={CoveragePercent} sceneCount={SceneCount} shotCount={ShotCount} minimumScenes={MinimumScenes} minimumShots={MinimumShots} targetSceneRange={TargetSceneMin}-{TargetSceneMax} targetShotRange={TargetShotMin}-{TargetShotMax}",
+        id,
+        currentPlan.TargetDurationSeconds,
+        currentPlan.TotalPlannedDurationSeconds,
+        currentPlan.PlannedDurationCoveragePercent,
+        currentPlan.SceneCount,
+        currentPlan.ShotCount,
+        currentRules.minimumScenes,
+        currentRules.minimumShots,
+        currentRules.targetSceneMin,
+        currentRules.targetSceneMax,
+        currentRules.targetShotMin,
+        currentRules.targetShotMax);
+
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+    var now = DateTimeOffset.UtcNow;
+    foreach (var job in project.RenderJobs.Where(j => j.JobType == RenderJobType.RenderVideo && j.Status == RenderJobStatus.Pending))
+    {
+        job.Status = RenderJobStatus.Canceled;
+        job.ErrorMessage = "Cancelled because the director plan was repaired.";
+        job.FinishedAt = now;
+    }
+
+    ApplyProductionPlanInPlace(project, repairedPlan, mapper);
+    project.Status = ProjectStatus.ReadyForRender;
+    project.UpdatedAt = now;
+
+    await db.SaveChangesAsync(cancellationToken);
+    await transaction.CommitAsync(cancellationToken);
+
+    db.ChangeTracker.Clear();
+    var savedProject = await db.Projects
+        .Include(p => p.Characters)
+        .Include(p => p.Scenes).ThenInclude(s => s.Shots)
+        .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+    if (savedProject is null)
+    {
+        return Results.NotFound();
+    }
+
+    var response = mapper.FromProject(savedProject);
+    var responseRules = GetProjectDurationRules(response.TargetDurationSeconds);
+    logger.LogInformation(
+        "director_plan_regenerate_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} plannedDurationSeconds={PlannedDurationSeconds} coveragePercent={CoveragePercent} sceneCount={SceneCount} shotCount={ShotCount} minimumScenes={MinimumScenes} minimumShots={MinimumShots} targetSceneRange={TargetSceneMin}-{TargetSceneMax} targetShotRange={TargetShotMin}-{TargetShotMax}",
+        id,
+        response.TargetDurationSeconds,
+        response.TotalPlannedDurationSeconds,
+        response.PlannedDurationCoveragePercent,
+        response.SceneCount,
+        response.ShotCount,
+        responseRules.minimumScenes,
+        responseRules.minimumShots,
+        responseRules.targetSceneMin,
+        responseRules.targetSceneMax,
+        responseRules.targetShotMin,
+        responseRules.targetShotMax);
+    return Results.Ok(response);
+}
+
+static void ApplyProductionPlanInPlace(Project project, ProductionPlanDto plan, ProductionPlanMapper mapper)
+{
+    var projectUpdate = mapper.BuildProjectUpdate(plan);
+    project.Name = projectUpdate.Title;
+    project.Logline = projectUpdate.Logline;
+    project.Genre = projectUpdate.Genre;
+    project.TargetDurationSeconds = projectUpdate.TargetDurationSeconds;
+    project.VisualStylePrompt = projectUpdate.VisualStylePrompt;
+    project.NegativePrompt = projectUpdate.NegativePrompt;
+    project.CameraStyle = projectUpdate.CameraStyle;
+    project.LightingStyle = projectUpdate.LightingStyle;
+    project.ColorPalette = projectUpdate.ColorPalette;
+    project.AudioCuesJson = projectUpdate.AudioCuesJson;
+    project.DirectorTreatment = projectUpdate.DirectorTreatment;
+    project.BeatSheetJson = projectUpdate.BeatSheetJson;
+    project.ActBreakdownJson = projectUpdate.ActBreakdownJson;
+    project.CharacterBibleJson = projectUpdate.CharacterBibleJson;
+    project.LocationBibleJson = projectUpdate.LocationBibleJson;
+    project.TimelineContinuityJson = projectUpdate.TimelineContinuityJson;
+    project.VisualContinuityRulesJson = projectUpdate.VisualContinuityRulesJson;
+    project.RenderStrategyRecommendationJson = projectUpdate.RenderStrategyRecommendationJson;
+    project.QualityGoal = projectUpdate.QualityGoal;
+
+    var plannedCharacters = mapper.BuildCharacters(project.Id, plan);
+    foreach (var planned in plannedCharacters)
+    {
+        var existing = project.Characters.FirstOrDefault(c => c.Id == planned.Id)
+            ?? project.Characters.FirstOrDefault(c => c.Name.Equals(planned.Name, StringComparison.OrdinalIgnoreCase));
+        if (existing is null)
+        {
+            project.Characters.Add(planned);
+            continue;
+        }
+
+        existing.Name = planned.Name;
+        existing.Description = planned.Description;
+        existing.Role = planned.Role;
+        existing.Personality = planned.Personality;
+        existing.VisualPrompt = planned.VisualPrompt;
+        existing.VoiceStyle = planned.VoiceStyle;
+        existing.ContinuityRulesJson = planned.ContinuityRulesJson;
+        existing.CharacterBibleJson = planned.CharacterBibleJson;
+        existing.ReferenceImagePrompt = planned.ReferenceImagePrompt;
+        existing.ReferenceImageNegativePrompt = planned.ReferenceImageNegativePrompt;
+        existing.ReferenceStatus = string.IsNullOrWhiteSpace(existing.ReferenceImagePath) ? planned.ReferenceStatus : existing.ReferenceStatus;
+    }
+
+    var plannedScenes = mapper.BuildScenes(project.Id, plan);
+    foreach (var plannedScene in plannedScenes.OrderBy(s => s.Index))
+    {
+        var existingScene = project.Scenes.FirstOrDefault(s => s.Id == plannedScene.Id)
+            ?? project.Scenes.FirstOrDefault(s => s.Index == plannedScene.Index);
+        if (existingScene is null)
+        {
+            project.Scenes.Add(plannedScene);
+            continue;
+        }
+
+        CopySceneFields(existingScene, plannedScene);
+        foreach (var plannedShot in plannedScene.Shots.OrderBy(s => s.Index))
+        {
+            var existingShot = existingScene.Shots.FirstOrDefault(s => s.Id == plannedShot.Id)
+                ?? existingScene.Shots.FirstOrDefault(s => s.Index == plannedShot.Index);
+            if (existingShot is null)
+            {
+                existingScene.Shots.Add(plannedShot);
+                continue;
+            }
+
+            CopyShotFields(existingShot, plannedShot);
+        }
+    }
+}
+
+static void CopySceneFields(Scene existing, Scene planned)
+{
+    existing.Order = planned.Order;
+    existing.Index = planned.Index;
+    existing.Title = planned.Title;
+    existing.Description = planned.Description;
+    existing.Summary = planned.Summary;
+    existing.Location = planned.Location;
+    existing.TimeOfDay = planned.TimeOfDay;
+    existing.Mood = planned.Mood;
+    existing.EstimatedDurationSeconds = planned.EstimatedDurationSeconds;
+    existing.Purpose = planned.Purpose;
+    existing.StoryStateBefore = planned.StoryStateBefore;
+    existing.StoryStateAfter = planned.StoryStateAfter;
+    existing.LocationId = planned.LocationId;
+    existing.SceneAnchorPrompt = planned.SceneAnchorPrompt;
+    existing.LocationContinuityPrompt = planned.LocationContinuityPrompt;
+    existing.ForbiddenLocationDrift = planned.ForbiddenLocationDrift;
+    existing.RequiredCharactersJson = planned.RequiredCharactersJson;
+    existing.DialogueLinesJson = planned.DialogueLinesJson;
+}
+
+static void CopyShotFields(Shot existing, Shot planned)
+{
+    existing.Order = planned.Order;
+    existing.Index = planned.Index;
+    existing.DurationSeconds = planned.DurationSeconds;
+    existing.ShotType = planned.ShotType;
+    existing.CameraMotion = planned.CameraMotion;
+    existing.Action = planned.Action;
+    existing.Prompt = planned.Prompt;
+    existing.NegativePrompt = planned.NegativePrompt;
+    existing.AudioCue = planned.AudioCue;
+    existing.ContinuityNotes = planned.ContinuityNotes;
+    existing.InvolvedCharacterIdsJson = planned.InvolvedCharacterIdsJson;
+    existing.CharacterLockPrompt = planned.CharacterLockPrompt;
+    existing.LocationId = planned.LocationId;
+    existing.LocationLockPrompt = planned.LocationLockPrompt;
+    existing.ForbiddenDriftTerms = planned.ForbiddenDriftTerms;
+    existing.PreviousShotVisualState = planned.PreviousShotVisualState;
+    existing.CurrentShotVisualState = planned.CurrentShotVisualState;
+    existing.NextShotSetup = planned.NextShotSetup;
+    existing.KeyframeContinuityPrompt = planned.KeyframeContinuityPrompt;
+    existing.SceneAnchorPrompt = planned.SceneAnchorPrompt;
+    existing.RecommendedRenderDurationMode = planned.RecommendedRenderDurationMode;
+    existing.AssemblyExtensionAllowed = planned.AssemblyExtensionAllowed;
+    existing.StartImagePrompt = planned.StartImagePrompt;
+    existing.StartImageNegativePrompt = planned.StartImageNegativePrompt;
+    existing.StartImageStatus = string.IsNullOrWhiteSpace(existing.StartImagePath) ? planned.StartImageStatus : existing.StartImageStatus;
+}
 
 static ProjectSummaryDto ToSummary(Project project) => new(project.Id, project.Name, project.StoryText, project.TargetDurationSeconds, project.Status, project.CreatedAt, project.UpdatedAt);
 
@@ -2020,6 +2239,65 @@ static bool HasValidOutputPath(string? outputPath)
     }
 
     return !Path.IsPathFullyQualified(outputPath) || File.Exists(outputPath);
+}
+
+static object? GetProjectDurationPlanIssue(Project project)
+{
+    var targetDurationSeconds = project.TargetDurationSeconds > 0 ? project.TargetDurationSeconds : 60;
+    var sceneCount = project.Scenes.Count;
+    var shotCount = project.Scenes.Sum(scene => scene.Shots.Count);
+    var plannedDurationSeconds = project.Scenes.Sum(scene => scene.Shots.Sum(shot => Math.Max(0, shot.DurationSeconds)));
+    var rules = GetProjectDurationRules(targetDurationSeconds);
+    var minimumPlannedDurationSeconds = (int)Math.Ceiling(targetDurationSeconds * rules.minimumCoverageRatio);
+    var coveragePercent = targetDurationSeconds > 0
+        ? (int)Math.Round((double)plannedDurationSeconds / targetDurationSeconds * 100)
+        : 0;
+    var isValid = sceneCount >= rules.minimumScenes
+        && shotCount >= rules.minimumShots
+        && plannedDurationSeconds >= minimumPlannedDurationSeconds;
+    if (isValid)
+    {
+        return null;
+    }
+
+    return new
+    {
+        targetDurationSeconds,
+        plannedDurationSeconds,
+        coveragePercent,
+        sceneCount,
+        shotCount,
+        minimumScenes = rules.minimumScenes,
+        minimumShots = rules.minimumShots,
+        targetSceneRange = $"{rules.targetSceneMin}-{rules.targetSceneMax}",
+        targetShotRange = $"{rules.targetShotMin}-{rules.targetShotMax}",
+        minimumPlannedDurationSeconds
+    };
+}
+
+static (int minimumScenes, int targetSceneMin, int targetSceneMax, int minimumShots, int targetShotMin, int targetShotMax, double minimumCoverageRatio) GetProjectDurationRules(int targetDurationSeconds)
+{
+    if (targetDurationSeconds >= 420)
+    {
+        return (14, 18, 24, 50, 60, 84, 0.85);
+    }
+
+    if (targetDurationSeconds >= 300)
+    {
+        return (12, 14, 18, 40, 45, 60, 0.90);
+    }
+
+    if (targetDurationSeconds >= 180)
+    {
+        return (8, 10, 14, 24, 30, 36, 0.90);
+    }
+
+    if (targetDurationSeconds >= 60)
+    {
+        return (5, 6, 8, 10, 12, 16, 0.90);
+    }
+
+    return (1, 1, 4, 1, 1, 8, 0.85);
 }
 
 static double? RenderDurationSeconds(RenderJob? job)

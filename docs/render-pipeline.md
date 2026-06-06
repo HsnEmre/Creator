@@ -95,15 +95,17 @@ If Ollama returns a weak or incomplete plan, the API repairs it once determinist
 
 The current SDXL still-image backend is text-conditioned. It does not yet use prior keyframe images as image references. The planner therefore logs that limitation and strengthens connected text prompts instead of pretending image-reference conditioning exists.
 
-5. Long-form plans are duration-validated before persistence. Ollama is prompted to create enough short shots, but the API also enforces deterministic guardrails so an undersized LLM response is repaired rather than silently accepted:
+5. Plans are duration-validated before persistence. Ollama is prompted to create enough short shots, but the API also enforces deterministic guardrails so an undersized LLM response is repaired rather than silently accepted:
 
 | Target duration | Minimum scenes | Target scenes | Minimum shots | Target shots | Shot duration | Required planned duration |
 | --------------- | -------------: | ------------: | ------------: | -----------: | ------------: | ------------------------: |
+| `<60s`          |            `1` |         `1-4` |           `1` |        `1-8` |        `3-6s` |        at least `85%` |
+| `60-179s`       |            `5` |         `6-8` |          `10` |       `12-16` |        `4-6s` |        at least `90%` |
 | `180-299s`      |            `8` |       `10-14` |          `24` |      `30-36` |        `5-8s` |        at least `90%` |
 | `300-419s`      |           `12` |       `14-18` |          `40` |      `45-60` |        `5-8s` |        at least `90%` |
 | `420s+`         |           `14` |       `18-24` |          `50` |      `60-84` |        `5-8s` |        at least `85%` |
 
-   For shorter projects below 180 seconds, the previous compact behavior is preserved, but the normalizer avoids absurd 1-scene/1-shot plans unless the story explicitly behaves like a single-shot piece.
+   A 60-second short film therefore cannot be accepted as a 3-scene, 9-shot, 27-second storyboard. The preferred repaired shape for a 60-second plan is roughly 6 scenes, 12 shots, and 60 seconds of planned duration.
 
 6. If the returned plan is too short, the API expands it deterministically by duplicating and varying narrative beats into sequential scenes and shots, clamping long-form shots to `5-8s`, keeping character visual locks, and preserving dialogue from the original scene set. The analyze logs include:
 
@@ -112,6 +114,18 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
    * `storyboard_duration_repair_started`
    * `storyboard_duration_repair_completed`
    * `storyboard_duration_validation_completed`
+
+   Short-film director duration validation also emits:
+
+   * `director_duration_validation_started`
+   * `director_duration_validation_failed`
+   * `director_duration_repair_started`
+   * `director_duration_repair_completed`
+   * `director_duration_validation_completed`
+   * `director_plan_regenerate_requested`
+   * `director_plan_regenerate_completed`
+
+   These logs include the project id, target duration, planned duration, coverage percent, scene count, shot count, minimum scenes, minimum shots, and target scene/shot ranges.
 
 7. The normalizer also enforces cinematic continuity from the fields already persisted in SQL Server:
 
@@ -152,7 +166,12 @@ The current SDXL still-image backend is text-conditioned. It does not yet use pr
    * `duplicateNegativePromptGroups`
    * `continuityWarning`
 
-10. Existing projects created before these continuity/duration rules can be repaired by running Analyze again. Analyze replaces storyboard plan records safely while preserving completed final videos and generated media files on disk.
+10. Existing projects created before these continuity/duration rules can be repaired by running Analyze again or by using the director-plan repair action. Analyze replaces storyboard plan records safely while preserving completed final videos and generated media files on disk. Director-plan repair expands the current saved plan in place, keeps existing characters/scenes/shots where possible, preserves generated character references and shot start images, and cancels only replaceable pending video render jobs.
+
+   Repair/regenerate endpoints:
+
+   * `POST /api/projects/{id}/director-plan/repair`
+   * `POST /api/projects/{id}/director-plan/regenerate`
 
 11. `POST /api/projects/{id}/preproduction/prepare` creates or refreshes MagicLight-style visual preparation prompts:
 
@@ -297,6 +316,14 @@ For a ComfyUIParity shot, verify:
 * broader project-wide queues
 
 When `force=false` or omitted, render creation skips shots that already have an active `Pending`/`Rendering` video job or a latest successful completed render with a valid output path. This makes Storyboard "Animate Missing" safe for repeated local testing. Use `force=true` only when intentionally regenerating a selected shot or all shots.
+
+Render creation refuses invalid director duration plans. If the storyboard is below the target-duration guardrails, the API returns a clear error:
+
+```text
+Storyboard is too short for the target duration. Regenerate or repair plan before rendering.
+```
+
+The Storyboard UI mirrors this by showing a duration warning and disabling keyframe generation, Animate Selected, Animate Missing, and Regenerate All until the director plan is repaired or regenerated.
 
 16. Scene and shot metadata can be edited after analysis. Scene order is read by `sceneIndex`; shot order is read by `shotIndex`.
 

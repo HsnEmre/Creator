@@ -41,8 +41,10 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             plan.AudioCues ?? []);
 
         var validation = ValidateDurationPlan(normalized, rules);
+        LogDirectorDurationValidation("director_duration_validation_started", projectId, normalizedTarget, validation, rules);
         if (!validation.IsValid)
         {
+            LogDirectorDurationValidation("director_duration_validation_failed", projectId, normalizedTarget, validation, rules);
             logger.LogWarning(
                 "storyboard_duration_validation_failed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} totalPlannedDurationSeconds={TotalPlannedDurationSeconds} minScenes={MinimumScenes} minShots={MinimumShots} minimumPlannedDurationSeconds={MinimumPlannedDurationSeconds} warning={Warning}",
                 projectId,
@@ -54,6 +56,7 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
                 rules.MinimumShots,
                 validation.MinimumPlannedDurationSeconds,
                 validation.Warning);
+            LogDirectorDurationValidation("director_duration_repair_started", projectId, normalizedTarget, validation, rules);
             logger.LogInformation(
                 "storyboard_duration_repair_started projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} totalPlannedDurationSeconds={TotalPlannedDurationSeconds}",
                 projectId,
@@ -64,6 +67,7 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
 
             normalized = RepairDurationPlan(normalized, visualStyle, characters, rules);
             validation = ValidateDurationPlan(normalized, rules);
+            LogDirectorDurationValidation("director_duration_repair_completed", projectId, normalizedTarget, validation, rules);
 
             logger.LogInformation(
                 "storyboard_duration_repair_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} sceneCount={SceneCount} shotCount={ShotCount} totalPlannedDurationSeconds={TotalPlannedDurationSeconds} minimumPlannedDurationSeconds={MinimumPlannedDurationSeconds} isDurationPlanValid={IsDurationPlanValid}",
@@ -93,8 +97,46 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             validation.TotalPlannedDurationSeconds,
             validation.CoveragePercent,
             validation.IsValid);
+        LogDirectorDurationValidation("director_duration_validation_completed", projectId, normalizedTarget, validation, rules);
 
         return WithDurationMetadata(normalized, validation.Warning);
+    }
+
+    public ProductionPlanDto RepairDirectorDurationPlan(ProductionPlanDto plan, Guid? projectId = null)
+    {
+        var requestedRules = DurationPlanningRules.For(plan.TargetDurationSeconds);
+        var requestedValidation = ValidateDurationPlan(plan, requestedRules);
+        logger.LogInformation(
+            "director_plan_regenerate_requested projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} plannedDurationSeconds={PlannedDurationSeconds} coveragePercent={CoveragePercent} sceneCount={SceneCount} shotCount={ShotCount} minimumScenes={MinimumScenes} minimumShots={MinimumShots} targetSceneRange={TargetSceneMin}-{TargetSceneMax} targetShotRange={TargetShotMin}-{TargetShotMax}",
+            projectId,
+            plan.TargetDurationSeconds,
+            requestedValidation.TotalPlannedDurationSeconds,
+            requestedValidation.CoveragePercent,
+            requestedValidation.SceneCount,
+            requestedValidation.ShotCount,
+            requestedRules.MinimumScenes,
+            requestedRules.MinimumShots,
+            requestedRules.TargetSceneMin,
+            requestedRules.TargetSceneMax,
+            requestedRules.TargetShotMin,
+            requestedRules.TargetShotMax);
+        var repaired = Normalize(plan, plan.Title, plan.TargetDurationSeconds, projectId);
+        var repairedRules = DurationPlanningRules.For(repaired.TargetDurationSeconds);
+        logger.LogInformation(
+            "director_plan_regenerate_completed projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} plannedDurationSeconds={PlannedDurationSeconds} coveragePercent={CoveragePercent} sceneCount={SceneCount} shotCount={ShotCount} minimumScenes={MinimumScenes} minimumShots={MinimumShots} targetSceneRange={TargetSceneMin}-{TargetSceneMax} targetShotRange={TargetShotMin}-{TargetShotMax}",
+            projectId,
+            repaired.TargetDurationSeconds,
+            repaired.TotalPlannedDurationSeconds,
+            repaired.PlannedDurationCoveragePercent,
+            repaired.SceneCount,
+            repaired.ShotCount,
+            repairedRules.MinimumScenes,
+            repairedRules.MinimumShots,
+            repairedRules.TargetSceneMin,
+            repairedRules.TargetSceneMax,
+            repairedRules.TargetShotMin,
+            repairedRules.TargetShotMax);
+        return repaired;
     }
 
     public static ProductionPlanDto WithDurationMetadata(ProductionPlanDto plan, string? warning = null)
@@ -134,8 +176,8 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
             DistinctNegativePromptCount = distinctNegativePrompts,
             DuplicateNegativePromptGroups = duplicateNegativePromptGroups,
             ContinuityWarning = continuityWarning,
-            HasDirectorPlan = plan.DirectorPlan is not null && !string.IsNullOrWhiteSpace(plan.DirectorTreatment),
-            StoryStructureValid = plan.BeatSheet.Count > 0 && plan.ActBreakdown.Count > 0 && sceneCount > 0 && shotCount > 0,
+            HasDirectorPlan = validation.IsValid && plan.DirectorPlan is not null && !string.IsNullOrWhiteSpace(plan.DirectorTreatment),
+            StoryStructureValid = validation.IsValid && plan.BeatSheet.Count > 0 && plan.ActBreakdown.Count > 0 && sceneCount > 0 && shotCount > 0,
             LocationContinuityValid = plan.DirectorPlan?.LocationBible.Count > 0 && plan.Scenes.All(scene => !string.IsNullOrWhiteSpace(scene.LocationId)),
             KeyframeContinuityValid = plan.Scenes.SelectMany(scene => scene.Shots).All(shot => !string.IsNullOrWhiteSpace(shot.KeyframeContinuityPrompt)),
             RenderStrategyName = plan.RenderStrategy?.Name ?? plan.DirectorPlan?.RenderStrategyRecommendation.Name,
@@ -475,21 +517,16 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
         List<CharacterPlanDto> characters,
         DurationPlanningRules rules)
     {
-        if (!rules.IsLongForm && !(plan.TargetDurationSeconds >= 60 && plan.Scenes.Count <= 1 && plan.Scenes.Sum(s => s.Shots.Count) <= 1))
-        {
-            return plan;
-        }
-
         var desiredSceneCount = rules.IsLongForm
             ? Math.Max(plan.Scenes.Count, rules.TargetSceneMin)
-            : Math.Max(plan.Scenes.Count, 2);
+            : Math.Max(plan.Scenes.Count, rules.TargetSceneMin);
         desiredSceneCount = Math.Min(desiredSceneCount, rules.TargetSceneMax);
 
         var coverageSeconds = (int)Math.Ceiling(plan.TargetDurationSeconds * rules.MinimumCoverageRatio);
         var shotsForCoverage = (int)Math.Ceiling((double)coverageSeconds / Math.Max(1, rules.MaxShotSeconds));
         var desiredShotCount = rules.IsLongForm
             ? Math.Max(rules.TargetShotMin, Math.Max(plan.Scenes.Sum(s => s.Shots.Count), shotsForCoverage))
-            : Math.Max(3, plan.Scenes.Sum(s => s.Shots.Count));
+            : Math.Max(rules.TargetShotMin, Math.Max(plan.Scenes.Sum(s => s.Shots.Count), shotsForCoverage));
         desiredShotCount = Math.Min(desiredShotCount, rules.TargetShotMax);
         desiredShotCount = Math.Max(desiredShotCount, rules.MinimumShots);
 
@@ -567,7 +604,10 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
                 $"{Required(source.ContinuityNotes, "Maintain visual continuity.")} Keep character visual locks and location continuity stable across the long-form sequence.")
             {
                 StartImagePrompt = Required(source.StartImagePrompt, startImagePrompt),
-                StartImageNegativePrompt = Required(source.StartImageNegativePrompt, BuildImageNegativePrompt(scene, source))
+                StartImageNegativePrompt = Required(source.StartImageNegativePrompt, BuildImageNegativePrompt(scene, source)),
+                StartImageStatus = source.StartImageStatus,
+                StartImagePath = source.StartImagePath,
+                StartImageUrl = source.StartImageUrl
             });
         }
 
@@ -689,7 +729,8 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
                 ReferenceImageNegativePrompt = Required(character.ReferenceImageNegativePrompt, StrongNegativePrompt),
                 ReferenceStatus = character.ReferenceStatus,
                 ReferenceImagePath = character.ReferenceImagePath,
-                ReferenceImageUrl = character.ReferenceImageUrl
+                ReferenceImageUrl = character.ReferenceImageUrl,
+                Bible = character.Bible
             };
         }).ToList();
     }
@@ -700,15 +741,11 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
         var shotCount = plan.Scenes.Sum(scene => scene.Shots.Count);
         var plannedDuration = plan.Scenes.Sum(scene => scene.Shots.Sum(shot => Math.Max(0, shot.DurationSeconds)));
         var minimumDuration = (int)Math.Ceiling(plan.TargetDurationSeconds * rules.MinimumCoverageRatio);
-        var isValid = rules.IsLongForm
-            ? sceneCount >= rules.MinimumScenes && shotCount >= rules.MinimumShots && plannedDuration >= minimumDuration
-            : sceneCount >= rules.MinimumScenes && shotCount >= rules.MinimumShots && !(plan.TargetDurationSeconds >= 60 && sceneCount <= 1 && shotCount <= 1);
+        var isValid = sceneCount >= rules.MinimumScenes && shotCount >= rules.MinimumShots && plannedDuration >= minimumDuration;
         string? warning = null;
         if (!isValid)
         {
-            warning = rules.IsLongForm
-                ? $"Storyboard duration plan is short: {sceneCount} scenes, {shotCount} shots, {plannedDuration}s planned for a {plan.TargetDurationSeconds}s target. Required minimum is {rules.MinimumScenes} scenes, {rules.MinimumShots} shots, and {minimumDuration}s planned."
-                : $"Storyboard plan is too thin for this target: {sceneCount} scenes and {shotCount} shots. Add more beats or analyze again.";
+            warning = $"Storyboard duration plan is short: {sceneCount} scenes, {shotCount} shots, {plannedDuration}s planned for a {plan.TargetDurationSeconds}s target. Required minimum is {rules.MinimumScenes} scenes, {rules.MinimumShots} shots, and {minimumDuration}s planned.";
         }
 
         return new DurationValidationResult(sceneCount, shotCount, plannedDuration, minimumDuration, plan.TargetDurationSeconds > 0 ? (int)Math.Round((double)plannedDuration / plan.TargetDurationSeconds * 100) : 0, isValid, warning);
@@ -971,7 +1008,31 @@ public sealed class ProductionPlanNormalizer(ILogger<ProductionPlanNormalizer> l
                 return new DurationPlanningRules(8, 10, 14, 24, 30, 36, 5, 8, 0.90, true);
             }
 
-            return new DurationPlanningRules(1, 1, 6, 1, 1, 18, 3, 6, 0.50, false);
+            if (targetDurationSeconds >= 60)
+            {
+                return new DurationPlanningRules(5, 6, 8, 10, 12, 16, 4, 6, 0.90, false);
+            }
+
+            return new DurationPlanningRules(1, 1, 4, 1, 1, 8, 3, 6, 0.85, false);
         }
+    }
+
+    private void LogDirectorDurationValidation(string eventName, Guid? projectId, int targetDurationSeconds, DurationValidationResult validation, DurationPlanningRules rules)
+    {
+        logger.LogInformation(
+            "{EventName} projectId={ProjectId} targetDurationSeconds={TargetDurationSeconds} plannedDurationSeconds={PlannedDurationSeconds} coveragePercent={CoveragePercent} sceneCount={SceneCount} shotCount={ShotCount} minimumScenes={MinimumScenes} minimumShots={MinimumShots} targetSceneRange={TargetSceneMin}-{TargetSceneMax} targetShotRange={TargetShotMin}-{TargetShotMax}",
+            eventName,
+            projectId,
+            targetDurationSeconds,
+            validation.TotalPlannedDurationSeconds,
+            validation.CoveragePercent,
+            validation.SceneCount,
+            validation.ShotCount,
+            rules.MinimumScenes,
+            rules.MinimumShots,
+            rules.TargetSceneMin,
+            rules.TargetSceneMax,
+            rules.TargetShotMin,
+            rules.TargetShotMax);
     }
 }
